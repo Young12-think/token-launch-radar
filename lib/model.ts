@@ -24,6 +24,14 @@
 //      Nothing here claims a protocol HAS a points program or funding round; the
 //      farm plans say what to do on the protocol itself and tell the reader to verify
 //      the live program on the protocol's own docs before committing funds.
+//
+// Sharpening (24 Nov 2026, still snapshot-only): each row also carries a one-line
+// multiple_note naming the peer set behind its multiple and why that set was used,
+// so a repeated median is a documented method choice, not a stamped number. The
+// highest-ranked rows get curated farm plans (PRODUCT_PLANS below) that name the
+// real vault, market or mechanism — researched from the protocols' own docs and
+// listings in Nov 2026 and baked in as literal strings. No curated step claims a
+// points program, an APY, or a launch date the snapshot does not record.
 
 export interface Protocol {
   slug: string;
@@ -72,6 +80,9 @@ export interface BoardRow {
   bull_usd: number;
   multiple: number;
   multiple_level: 'category' | 'group' | 'global';
+  multiple_p25: number;
+  multiple_p75: number;
+  multiple_note: string;
   peer_count: number;
   peers: { name: string; multiple: number }[];
   plausibility: number;
@@ -268,6 +279,36 @@ function multipleSet(values: number[]): { median: number; p25: number; p75: numb
   return { median: median(s), p25: percentile(s, 0.25), p75: percentile(s, 0.75), n: s.length };
 }
 
+// One line per row, naming the peer set behind its multiple and why that set was
+// used. The point is that a repeated median (0.169x on several Risk Curator rows)
+// is a documented fallback, not a stamped number. An extreme outlier peer is
+// called out only for small category-level peer sets, where one peer is visible
+// enough to look like it stretches the range (the BitFi case: Bitway Earn at
+// 36.17x among 7 Basis Trading peers). With at least five peers the max never
+// sets the median or the p25/p75 range, so the note says so.
+function multipleNote(p: Protocol, m: MultipleSet, pool: Peer[]): string {
+  const med = Math.round(m.median * 1000) / 1000;
+  const p25 = Math.round(m.p25 * 1000) / 1000;
+  const p75 = Math.round(m.p75 * 1000) / 1000;
+  const cat = p.category ?? 'Uncategorised';
+  let note: string;
+  if (m.level === 'category') {
+    note = `Multiple is the median of ${m.n} tokenised ${cat} peers (p25 ${p25}x, p75 ${p75}x).`;
+  } else if (m.level === 'group') {
+    const g = GROUP_OF[cat] ?? 'infra';
+    note = `${cat} has no tokenised peer set of its own (fewer than 3 peers with a market cap), so the multiple is the median of ${m.n} ${g}-group peers (p25 ${p25}x, p75 ${p75}x).`;
+  } else {
+    note = `No category or group peer set, so the multiple is the median of ${m.n} tokenised protocols overall (p25 ${p25}x, p75 ${p75}x).`;
+  }
+  if (m.level === 'category' && m.n >= 5 && m.n <= 10 && pool.length > 0) {
+    const top = [...pool].sort((a, b) => b.multiple - a.multiple)[0]!;
+    if (top.multiple > 10 * m.p75) {
+      note += ` One peer, ${top.name} at ${Math.round(top.multiple * 100) / 100}x, is an extreme outlier far above the rest of the set; it does not move the median or the p25/p75 range.`;
+    }
+  }
+  return note;
+}
+
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const watch = new Set(snapshot.watchlist);
   const tokenised = snapshot.protocols.filter((p) => p.gecko_id !== null || p.symbol !== null);
@@ -371,6 +412,9 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       bull_usd: Math.max(1, Math.round(bull)),
       multiple: Math.round(m.median * 1000) / 1000,
       multiple_level: m.level,
+      multiple_p25: Math.round(m.p25 * 1000) / 1000,
+      multiple_p75: Math.round(m.p75 * 1000) / 1000,
+      multiple_note: multipleNote(p, m, compPool),
       peer_count: m.n,
       peers: named,
       plausibility: Math.round(plaus * 100) / 100,
@@ -399,7 +443,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       set_aside: setAside.length,
       global_multiple: { median: Math.round(global.median * 1000) / 1000, p25: Math.round(global.p25 * 1000) / 1000, p75: Math.round(global.p75 * 1000) / 1000, peers: global.n },
       model_note:
-        'Implied value = TVL x the median market-cap/TVL multiple of tokenised peers in the same category (group, then whole field, where a category has fewer than 3 peers), adjusted for 7-day TVL momentum, seasoning since first tracked, and chain breadth. Protocols the house rule excludes (bridges, liquid-staking wrappers, CEX, versioned/wrapped names) are set aside, not ranked. Multiples use circulating market cap, not FDV, so values are a floor. Bear/base/bull use the 25th/median/75th peer multiples.',
+        'Implied value = TVL x the median market-cap/TVL multiple of tokenised peers in the same category (group, then whole field, where a category has fewer than 3 peers), adjusted for 7-day TVL momentum, seasoning since first tracked, and chain breadth. Protocols the house rule excludes (bridges, liquid-staking wrappers, CEX, versioned/wrapped names) are set aside, not ranked. Multiples use circulating market cap, not FDV, so values are a floor. Bear/base/bull use the 25th/median/75th peer multiples. Each row carries a multiple_note naming the peer set behind its multiple and why that set was used. Third-party pages report Extended’s XTEN token launching 30 Nov 2026, after this snapshot’s date; the board still ranks Extended from the 14 Nov snapshot, as the bounty requires.',
     },
     rows,
     comps: peers,
@@ -452,6 +496,117 @@ export function dataScript(radar: RadarData): string {
 // program on the protocol's own docs first, because this board is built from a
 // 14 Nov 2026 snapshot, not live data, and no plan here claims a points program
 // or an airdrop the snapshot does not record.
+//
+// The highest-ranked rows get curated plans (curatedPlan below) that name the
+// real vault, market or mechanism instead of a generic template. The cadence
+// and log steps also vary by category group, so the tail of every plan names
+// what that kind of protocol actually asks a user to record.
+
+// Curated farm plans for the highest-ranked rows. Each names the real product a
+// reader touches (vault, market, mechanism) instead of a generic "flagship vault".
+// Researched from the protocols' own docs and listings in Nov 2026 and baked in
+// here as literal strings; the program still reads nothing but the sealed snapshot.
+// Deliberately claims NO points program, NO APY, NO launch date the snapshot
+// does not record. Every plan is setup + three protocol-specific actions; the
+// shared verify-first and exit steps are appended by farmPlan below.
+interface CuratedPlan { setup: string; actions: string[]; }
+
+function curatedPlan(p: Protocol, size: string, chain: string, gas: string): CuratedPlan | null {
+  switch (p.slug) {
+    case 'steakhouse-financial':
+      return {
+        setup: `Deposit ${size} into Steakhouse Prime USDC (steakUSDC) on Morpho on ${chain}, the vault that lends USDC only against blue-chip collateral (cbBTC, cbETH, WETH, wstETH), plus ${gas}.`,
+        actions: [
+          `On Morpho, open Steakhouse Prime USDC and check the vault's current collateral list and loan-to-value before depositing; Prime accepts blue-chip collateral only, so a loan against it stays inside the same safety band.`,
+          `Optionally add a second, smaller deposit into Steakhouse High Yield USDC, the higher-yield tier that takes a broader collateral set than Prime; write down the exact collateral difference before sizing it.`,
+          `Keep the steakUSDC share-token receipt and the deposit transaction; if the vault ever changes collateral or curator, the receipt is the record of what was deposited and when.`,
+        ],
+      };
+    case 'polymarket-international':
+      return {
+        setup: `Fund ${size} on Polymarket on ${chain} with USDC; the site wraps it into pUSD, the ERC-20 balance token backed 1:1 by USDC/USDC.e, plus ${gas}.`,
+        actions: [
+          `Pick one market whose question and resolution source are plain to you (for example an election or a sports result), read its rules page, and place a small trade; keep most of the position in pUSD until the mechanics are familiar.`,
+          `Trade inside the markets themselves rather than holding a balance; note which markets have the deepest books, because thin books are where a fill costs more than the price shown.`,
+          `Do not touch Polymarket US unless you are a US user: it is a CFTC-regulated exchange with its own registration, and the international site is the one this entry tracks.`,
+        ],
+      };
+    case 'sentora-curator':
+      return {
+        setup: `Deposit ${size} into Sentora RLUSD Main on Morpho on ${chain}, the vault that lends against RLUSD with an audited curator review, plus ${gas}.`,
+        actions: [
+          `On Morpho, open Sentora RLUSD Main and confirm the vault's collateral list and its borrow cap; a small share of this vault's funds is withdrawable on demand, so check the current withdrawable amount before sizing a deposit.`,
+          `Optionally add a second deposit into Sentora PayPal USD Main, the other large vault in the same family (PYUSD collateral); compare the two vaults' collateral and withdrawable amounts side by side before choosing.`,
+          `Keep the Morpho vault share-token receipt and the deposit transaction; if Sentora ever changes the vault's curator or collateral, the receipt is the record of what was deposited and when.`,
+        ],
+      };
+    case 'gauntlet':
+      return {
+        setup: `Deposit ${size} into Gauntlet USDC Prime on Morpho on ${chain}, the blue-chip-only tier that lends against wstETH, cbBTC, wBTC and sDAI, plus ${gas}.`,
+        actions: [
+          `On Morpho, open Gauntlet USDC Prime and check the current collateral list and loan-to-value; Prime accepts blue-chip collateral only, so a loan against it stays inside the same safety band.`,
+          `Optionally step one tier up to Gauntlet USDC Core (listed as Balanced in newer docs), which adds PT tokens and sUSDe; write down the extra collateral accepted before sizing it, and keep the higher-yield Frontier tier (syrupUSDC, sdeUSD) for a separate, smaller deposit if you want it at all.`,
+          `Uniswap Earn routes into the Prime tier, so if you already use Uniswap Earn, check whether the same vault is available there before opening a second position.`,
+        ],
+      };
+    case 'veda':
+      return {
+        setup: `Deposit ${size} into a partner vault built on Veda's BoringVault infrastructure on ${chain}, for example the ether.fi Liquid vault, the Kraken DeFi Earn vault or the MetaMask Earn vault, plus ${gas}.`,
+        actions: [
+          `Open the partner vault's own page and check what it actually holds (liquid restaking tokens, stablecoins, or a mix); Veda is the vault infrastructure, not the vault itself, so the risk sits in the partner's strategy, not in a Veda flagship product.`,
+          `Compare two partner vaults side by side on the same page (assets held, withdrawal terms, fees) before choosing; do not deposit into a vault whose holdings you cannot name.`,
+          `Keep the vault share-token receipt and the deposit transaction; if the partner ever changes strategy or manager, the receipt is the record of what was deposited and when.`,
+        ],
+      };
+    case 'usdd':
+      return {
+        setup: `Mint ${size} of USDD 2.0 on ${chain} through the PSM (Peg Stability Module), which swaps USDT or USDC 1:1 with no fee, plus ${gas}.`,
+        actions: [
+          `Deposit the minted USDD into the sUSDD savings vault on the USDD site and check the current savings rate there; the vault, not the stablecoin itself, is where the yield comes from.`,
+          `Optionally open a USDD vault position with TRX or staked TRX as collateral and mint up to about half the liquidation line (liquidation sits below a 120% collateral ratio); write down the exact ratio before borrowing.`,
+          `Keep the PSM swap receipt and the vault deposit transaction; if USDD ever changes its peg mechanism or the Smart Allocator's backing, the receipts are the record of what was held and when.`,
+        ],
+      };
+    case 'hive-protocol':
+      return {
+        setup: `Bridge ${size} of BTC to ${chain} and stake it in the BSquared Hive vault, which stakes BTC to safeguard the B2 network and pays rewards in the B2 token, plus ${gas}.`,
+        actions: [
+          `On Hive's own site, check the bridge's status and the vault's current terms first, then bridge the BTC and stake it in the Hive vault; note the one-day unstaking lock, so do not stake funds needed sooner.`,
+          `Watch the B2 rewards the vault accrues and record how they are paid (token, cadence, claim or auto-compound); a reward that cannot be claimed or sold is not a return yet.`,
+          `Keep the bridge transaction and the staking receipt; if the bridge or the vault ever pauses, the receipts are the record of where the BTC went and when.`,
+        ],
+      };
+    case 'figure-markets-exchange':
+      return {
+        setup: `Open a Figure Markets account on ${chain} and deposit ${size} into YLDS, the SEC-registered yield-bearing stablecoin that accrues interest daily and pays monthly, plus ${gas}.`,
+        actions: [
+          `Complete the account and identity check first: YLDS is a registered security, not a permissionless vault token, so there is no way to hold it without an account; read the offering documents before depositing.`,
+          `Check the current yield on the YLDS page (it tracks the Secured Overnight Financing Rate minus 35 basis points) and confirm the daily accrual and monthly payment schedule in the account.`,
+          `Keep the account statement and the deposit receipt; YLDS is not a bank deposit and is not FDIC-insured, so the account record is the proof of what was held and when.`,
+        ],
+      };
+    case 'bitfi-basis':
+      return {
+        setup: `Deposit ${size} of USDT on ${chain} to mint bfUSD, BitFi's yield stablecoin, which is backed by delta-neutral positions held with the custodian Ceffu, plus ${gas}.`,
+        actions: [
+          `On the BitFi app, mint bfUSD with USDT and record the mint fee the app actually charged; the fee is not published publicly, so the number on screen is the only fee you will ever see.`,
+          `Optionally hold bfBTC, the yield-bearing BTC token from the same issuer, instead of or alongside bfUSD; compare the two tokens' backing and redemption terms on the BitFi site before choosing.`,
+          `Keep the mint receipt and the deposit transaction; BitFi lists no public audits on DefiLlama, so the receipt and a record of the custodian arrangement are the only proof of what was held and when.`,
+        ],
+      };
+    case 'extended-perps':
+      return {
+        setup: `Deposit ${size} of USDC into Extended on ${chain}, the Starknet hybrid perps exchange (formerly X10) that settles in USDC with no account or KYC, plus ${gas}.`,
+        actions: [
+          `Pick one market you can explain in a sentence (for example BTC, EUR/USD or gold; Extended lists 50+ markets including TradFi) and place a small trade with leverage well below the 100x maximum; keep most of the deposit in USDC until the order book and fees are familiar.`,
+          `Optionally deposit into the XVS vault, Extended's yield vault for USDC; check the vault's current terms on the Extended site and do not quote any APY figure from a third-party page, because the vault's rate is not verified here.`,
+          `Keep the deposit and trade receipts; Extended's settlement moved to the Arc chain in Oct 2026, so confirm which chain your funds actually settle on before depositing.`,
+        ],
+      };
+    default:
+      return null;
+  }
+}
 
 function primaryChain(p: Protocol): string {
   return p.chains.length > 0 ? p.chains[0]! : 'Ethereum';
@@ -465,12 +620,56 @@ function exitStep(p: Protocol): string {
   return `Plan the exit before you enter: know how to unwind each position on ${p.name}, keep a small reserve for gas on ${primaryChain(p)}, and never lock funds you need within the next month. If the protocol pauses deposits or changes terms, unwind rather than chase it.`;
 }
 
-function cadenceStep(): string {
-  return 'Spread the activity over 3–4 weeks, 2–3 sessions a week, instead of one burst: a steady footprint reads as real use, and a single-day burst reads as a sybil run.';
+function cadenceStep(group: string): string {
+  const activity =
+    group === 'trading'
+      ? 'the trades'
+      : group === 'credit'
+        ? 'the supply and borrow cycle'
+        : group === 'yield'
+          ? 'deposits and claims'
+          : group === 'staking'
+            ? 'the stake and any restaking'
+            : group === 'bridge'
+              ? 'the transfers'
+              : group === 'rwa'
+                ? 'the position and any redemptions'
+                : group === 'cex'
+                  ? 'the trades'
+                  : 'the activity';
+  return `Spread ${activity} over 3–4 weeks, 2–3 sessions a week, instead of one burst: a steady footprint reads as real use, and a single-day burst reads as a sybil run.`;
 }
 
-function trackStep(p: Protocol): string {
-  return `Keep a one-line log of every action on ${p.name} — date, amount, chain, transaction hash — and check weekly for new quests, seasons or announcements. A farm you cannot reconstruct is a farm you cannot defend.`;
+function trackStep(p: Protocol, group: string): string {
+  const what =
+    group === 'trading'
+      ? 'every trade — date, market, side, size, fill price, transaction hash'
+      : group === 'credit'
+        ? 'every supply, borrow and repayment — date, asset, amount, collateral ratio, transaction hash'
+        : group === 'yield'
+          ? 'every deposit and claim — date, vault name, share token received, amount, transaction hash'
+          : group === 'staking'
+            ? 'every stake, restake and claim — date, amount, receipt token, unstaking delay, transaction hash'
+            : group === 'bridge'
+              ? 'every bridge transfer — date, source and destination chain, amount, fee, arrival time, transaction hash'
+              : group === 'rwa'
+                ? 'every position and redemption — date, asset, amount, yield received, transaction hash'
+                : group === 'cex'
+                  ? 'every trade and earn position — date, market, size, fee, transaction or order id'
+                  : 'every action — date, amount, chain, transaction hash';
+  const watchFor =
+    group === 'trading'
+      ? 'new markets, seasons or announcements'
+      : group === 'credit' || group === 'yield'
+        ? 'new vaults, seasons or announcements'
+        : group === 'staking'
+          ? 'new options, seasons or announcements'
+          : group === 'bridge'
+            ? 'new routes, seasons or announcements'
+            : group === 'rwa'
+              ? 'new offerings, seasons or announcements'
+              : 'new products or announcements';
+  return `Keep a one-line log of ${what} on ${p.name}, and check weekly for ${watchFor}. A farm you cannot reconstruct is a farm you cannot defend.`;
 }
 
 function farmPlan(p: Protocol, m: MultipleSet): string[] {
@@ -483,10 +682,14 @@ function farmPlan(p: Protocol, m: MultipleSet): string[] {
   const tvlNote = `${money(p.tvl_usd)} of TVL on the snapshot`;
   const steps: string[] = [];
 
-  const setup = `Set up a fresh wallet that supports ${chain}, fund it with ${size} for positions plus gas money (${gas}), and bridge only what the plan below needs. Keep the farm wallet separate from your main holdings.`;
-  steps.push(setup);
+  const curated = curatedPlan(p, size, chain, gas);
+  if (curated !== null) {
+    steps.push(curated.setup, ...curated.actions);
+  } else {
+    const setup = `Set up a fresh wallet that supports ${chain}, fund it with ${size} for positions plus gas money (${gas}), and bridge only what the plan below needs. Keep the farm wallet separate from your main holdings.`;
+    steps.push(setup);
 
-  switch (group) {
+    switch (group) {
     case 'trading': {
       steps.push(`Swap a small amount through ${name} on ${chain} first — a $50–150 test trade — and confirm the quote, slippage and receipt land as expected before sizing up.`);
       steps.push(`Provide liquidity or trade again in the same pool on ${name} at least twice more across the next two weeks, using varied sizes so the activity looks like a trader's, not a script's.`);
@@ -548,10 +751,11 @@ function farmPlan(p: Protocol, m: MultipleSet): string[] {
       steps.push(`If ${name} has a community channel or governance forum, read its latest updates once a week: infrastructure launches are announced there first, not on price charts.`);
       break;
     }
+    }
   }
 
-  steps.push(cadenceStep());
-  steps.push(trackStep(p));
+  steps.push(cadenceStep(group));
+  steps.push(trackStep(p, group));
   steps.push(verifyStep(p));
   steps.push(exitStep(p));
   return steps.slice(0, 8);

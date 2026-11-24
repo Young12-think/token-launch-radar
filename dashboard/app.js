@@ -101,7 +101,8 @@
     var chf = 1 + 0.02 * Math.min(Math.max(r.chains.length - 1, 0), 10);
     $('dMath').innerHTML =
       '<dt>TVL</dt><dd>' + money(r.tvl_usd) + '</dd>' +
-      '<dt>Peer multiple (median)</dt><dd>' + r.multiple + 'x · ' + r.multiple_level + ' · ' + r.peer_count + ' peers</dd>' +
+      '<dt>Peer multiple (median)</dt><dd>' + r.multiple + 'x · ' + r.multiple_level + ' · ' + r.peer_count + ' peers' + (r.multiple_p25 !== undefined ? ' · p25 ' + r.multiple_p25 + 'x · p75 ' + r.multiple_p75 + 'x' : '') + '</dd>' +
+      (r.multiple_note ? '<dt>Why this multiple</dt><dd>' + esc(r.multiple_note) + '</dd>' : '') +
       '<dt>Base FDV (TVL × multiple)</dt><dd>' + money(r.base_fdv_usd) + '</dd>' +
       '<dt>Momentum factor</dt><dd>×' + mom.toFixed(2) + '</dd>' +
       '<dt>Seasoning factor</dt><dd>×' + sea.toFixed(2) + '</dd>' +
