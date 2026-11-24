@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Launch Radar — pre-token protocols, ranked by implied launch value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="radar-mark" viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="24" r="21" fill="none" stroke="#FFB000" stroke-width="1.5"/>
+      <circle cx="24" cy="24" r="13" fill="none" stroke="#3A4030" stroke-width="1"/>
+      <circle cx="24" cy="24" r="5" fill="none" stroke="#3A4030" stroke-width="1"/>
+      <line x1="24" y1="24" x2="41" y2="10" stroke="#FFB000" stroke-width="1.5"/>
+      <circle cx="36" cy="15" r="2.5" fill="#FFB000"/>
+      <circle cx="16" cy="30" r="2" fill="#D9DCC9"/>
+      <circle cx="29" cy="33" r="1.5" fill="#7E8672"/>
+    </svg>
+    <div>
+      <h1>TOKEN LAUNCH RADAR</h1>
+      <p class="sub">Pre-token protocols, ranked by what a launch would be worth. Snapshot 14 Nov 2026.</p>
+    </div>
+  </div>
+  <div class="top-stats" id="topStats"></div>
+</header>
+
+<main>
+  <section class="controls" aria-label="Filters">
+    <input id="q" type="search" placeholder="Search protocol…" autocomplete="off">
+    <select id="fCat" aria-label="Category"><option value="">All categories</option></select>
+    <select id="fChain" aria-label="Chain"><option value="">All chains</option></select>
+    <label class="check"><input id="fWatch" type="checkbox"> Watchlist only</label>
+    <select id="fSort" aria-label="Sort">
+      <option value="implied">Sort: implied value</option>
+      <option value="tvl">Sort: TVL</option>
+      <option value="momentum">Sort: 7-day momentum</option>
+      <option value="age">Sort: longest running</option>
+      <option value="readiness">Sort: readiness</option>
+    </select>
+    <span class="count" id="rowCount"></span>
+  </section>
+
+  <section class="board-wrap">
+    <table class="board" id="board">
+      <thead>
+        <tr>
+          <th class="num">#</th>
+          <th>Protocol</th>
+          <th>Category</th>
+          <th>Chains</th>
+          <th class="num">TVL</th>
+          <th class="num">7d</th>
+          <th class="num">Implied launch value</th>
+          <th class="range-col">Bear — Bull</th>
+          <th class="num">Ready</th>
+        </tr>
+      </thead>
+      <tbody id="boardBody"></tbody>
+    </table>
+    <p class="table-note">Click any row for the full breakdown: the multiple used, the named peers behind it, the adjustments, and the farm plan.</p>
+  </section>
+
+  <section class="detail" id="detail" hidden>
+    <div class="detail-head">
+      <div>
+        <h2 id="dName"></h2>
+        <p class="detail-sub" id="dSub"></p>
+      </div>
+      <button id="dClose" type="button">Close ×</button>
+    </div>
+    <div class="detail-grid">
+      <div class="detail-block">
+        <h3>How the number is built</h3>
+        <dl id="dMath"></dl>
+        <p class="fine" id="dLevel"></p>
+      </div>
+      <div class="detail-block">
+        <h3>Named peers behind the multiple</h3>
+        <table class="mini" id="dPeers"></table>
+        <p class="fine">Peers are tokenised protocols from the same pool the multiple came from, closest in TVL first. Their multiples are their own market-cap/TVL; the row uses the pool median.</p>
+      </div>
+    </div>
+    <div class="detail-block">
+      <h3>Farm plan — concrete steps, costs, time</h3>
+      <ol class="steps" id="dSteps"></ol>
+      <p class="fine">Steps are built from this protocol's own record (category, chains, TVL tier). Costs are gas estimates for the chain named; durations are the plan's own cadence, not a promise of a launch date.</p>
+    </div>
+  </section>
+
+  <section class="setaside">
+    <h2>Set aside — not ranked, and why</h2>
+    <p>These protocols record no token, but their structure makes a launch meaningless or near-impossible: bridges move other chains' assets, liquid-staking tokens are receipts for tokens that already trade, and centralised exchanges do not airdrop. Ranking them on raw TVL would put wrapped Bitcoin at the top of a launch radar. They are listed here with the reason, not silently cut.</p>
+    <table class="mini" id="setAsideTable"></table>
+  </section>
+
+  <section class="method">
+    <h2>How the value is scored</h2>
+    <div class="method-grid">
+      <div>
+        <h3>The formula</h3>
+        <p>Implied value = TVL × the median market-cap/TVL multiple of tokenised peers in the same category. Where a category has fewer than 3 peers, the multiple falls back to its category group, then to the whole field. The result is adjusted for 7-day TVL momentum (clamped −50% to +100%), seasoning since DefiLlama first tracked the protocol, and chain breadth. Bear and bull use the 25th and 75th peer multiples instead of the median.</p>
+      </div>
+      <div>
+        <h3>What is not in the number</h3>
+        <p>The snapshot carries no fees, revenue, funding, team or points-program data — so none of those are in the score, and no farm plan claims a points program exists. Multiples use circulating market cap, not fully-diluted value, so implied values are a floor: a token's FDV at launch is usually higher. Every multiple, peer count and adjustment is shown per protocol in its detail view.</p>
+      </div>
+      <div>
+        <h3>Source</h3>
+        <p>DefiLlama protocols endpoint, fetched 14 Nov 2026, frozen since. 758 protocols at or above $5M TVL; 342 record no token; 198 are launchable and ranked here; 144 are set aside above. Board data: <span class="mono">board.json</span>. This page reads <span class="mono">data.js</span> and works with no network.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>Token Launch Radar · built from the sealed 14 Nov 2026 snapshot · values are the entry's own claim, not a prediction that a token will launch, or when.</p>
+</footer>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
