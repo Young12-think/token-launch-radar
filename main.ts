@@ -43,6 +43,18 @@ if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
   process.exit(1);
 }
+// v2: the integrity strip is computed by buildRadar and refuses the build on
+// a failed check; print it here so the build log shows what was verified.
+const v = radar.meta.validation;
+for (const c of radar.meta.integrity) {
+  process.stdout.write(`token radar: integrity ${c.pass ? 'PASS' : 'FAIL'} ${c.id} — ${c.detail}\n`);
+}
+process.stdout.write(
+  `token radar: validation size-curve LOO n=${v.loo.n} median-log-err=${v.loo.median_log_error} within-3x=${v.loo.within_3x_pct}% | ` +
+    `walk-forward n=${v.walk_forward.n} median-log-err=${v.walk_forward.median_log_error} within-3x=${v.walk_forward.within_3x_pct}% | ` +
+    `band x${v.band_q25}–x${v.band_q75} held ${v.band_held_pct}% | ` +
+    `farm verdicts ${radar.meta.farm_verdict_counts.FARM} FARM / ${radar.meta.farm_verdict_counts.MARGINAL} MARGINAL / ${radar.meta.farm_verdict_counts.SKIP} SKIP\n`,
+);
 
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);

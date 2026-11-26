@@ -149,9 +149,29 @@ ol.steps li::marker { color: var(--amber); font-family: ui-monospace, Menlo, Con
 footer { border-top: 1px solid var(--line); padding: 14px 20px; color: var(--faint); font-size: 12px; }
 footer p { margin: 0; }
 
+/* ---- integrity strip (v2) ---- */
+.integrity { margin-top: 16px; border: 1px solid var(--line); background: var(--panel); padding: 12px 16px 14px; }
+.integrity h2 { margin-bottom: 10px; }
+.checks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.check-chip { border: 1px solid var(--line); background: var(--panel2); padding: 8px 10px; }
+.check-chip b { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.check-chip.ok b { color: var(--up); }
+.check-chip.bad b { color: var(--down); }
+.check-chip span { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.integrity .fine { margin: 10px 0 0; max-width: none; }
+
+/* ---- farm verdict badges (v2) ---- */
+.verdict { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border: 1px solid; }
+.v-farm { color: var(--up); border-color: #2c5a35; }
+.v-marginal { color: var(--amber); border-color: var(--amber-dim); }
+.v-skip { color: var(--down); border-color: #6e2a2d; }
+.farm-h { color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.board td.farm { white-space: normal; }
+
 @media (max-width: 760px) {
   .detail-grid, .method-grid { grid-template-columns: 1fr; }
   .detail-grid .detail-block:first-child { border-right: 0; padding-left: 16px; }
   .method-grid > div + div { border-left: 0; border-top: 1px solid var(--line-soft); }
   .board .chains, .range-col { display: none; }
+  .checks { grid-template-columns: 1fr; }
 }

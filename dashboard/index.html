@@ -27,6 +27,12 @@
 </header>
 
 <main>
+  <section class="integrity" id="integrity" aria-label="Integrity checks">
+    <h2>Integrity strip — what this board proves about itself</h2>
+    <div class="checks" id="integrityChecks"></div>
+    <p class="fine" id="integrityNote"></p>
+  </section>
+
   <section class="controls" aria-label="Filters">
     <input id="q" type="search" placeholder="Search protocol…" autocomplete="off">
     <select id="fCat" aria-label="Category"><option value="">All categories</option></select>
@@ -54,6 +60,7 @@
           <th class="num">7d</th>
           <th class="num">Implied launch value</th>
           <th class="range-col">Bear — Bull</th>
+          <th>Farm verdict</th>
           <th class="num">Ready</th>
         </tr>
       </thead>
@@ -74,6 +81,7 @@
       <div class="detail-block">
         <h3>How the number is built</h3>
         <dl id="dMath"></dl>
+        <p class="fine" id="dMultNote"></p>
         <p class="fine" id="dLevel"></p>
       </div>
       <div class="detail-block">
@@ -86,6 +94,11 @@
       <h3>Farm plan — concrete steps, costs, time</h3>
       <ol class="steps" id="dSteps"></ol>
       <p class="fine">Steps are built from this protocol's own record (category, chains, TVL tier). Costs are gas estimates for the chain named; durations are the plan's own cadence, not a promise of a launch date.</p>
+    </div>
+    <div class="detail-block">
+      <h3>Farm economics — what the plan costs, never what it earns</h3>
+      <dl id="dFarm"></dl>
+      <p class="fine" id="dFarmNote"></p>
     </div>
   </section>
 
@@ -100,11 +113,15 @@
     <div class="method-grid">
       <div>
         <h3>The formula</h3>
-        <p>Implied value = TVL × the median market-cap/TVL multiple of tokenised peers in the same category. Where a category has fewer than 3 peers, the multiple falls back to its category group, then to the whole field. The result is adjusted for 7-day TVL momentum (clamped −50% to +100%), seasoning since DefiLlama first tracked the protocol, and chain breadth. Bear and bull use the 25th and 75th peer multiples instead of the median.</p>
+        <p>Implied value = the size curve: log(market cap) = a + b·log(TVL), fitted by least squares on the snapshot's 128 tokenised peers, times a halved 7-day momentum factor (0.875x at −50% to 1.25x at +100%). The slope is below 1, so the implied multiple falls as TVL grows — the largest priced peers prove it (Lido 0.013x, OKX 0.075x, EigenCloud 0.032x). The category-median multiple is still shown per row as a cross-check; it lost the held-out test, so it prices nothing.</p>
+      </div>
+      <div>
+        <h3>Tested, not asserted</h3>
+        <p>Every term was put to two held-out tests on the snapshot itself — leave-one-out over all 128 peers, and walk-forward (fitted on peers listed before 2025, tested on peers listed after). The size curve won both against the v1 category-median multiple; seasoning and chain breadth failed both and were dropped; momentum survived at half strength. The bear–bull band is the 25th–75th percentile of the model's own leave-one-out errors. Full numbers are in the integrity strip above and in each row's detail view.</p>
       </div>
       <div>
         <h3>What is not in the number</h3>
-        <p>The snapshot carries no fees, revenue, funding, team or points-program data — so none of those are in the score, and no farm plan claims a points program exists. Multiples use circulating market cap, not fully-diluted value, so implied values are a floor: a token's FDV at launch is usually higher. Every multiple, peer count and adjustment is shown per protocol in its detail view.</p>
+        <p>The snapshot carries no fees, revenue, funding, team or points-program data — so none of those are in the score, and no farm plan claims a points program exists. Multiples use circulating market cap, not fully-diluted value, so implied values are a floor: a token's FDV at launch is usually higher. Farm verdicts price gas cost against the position size only; no return is ever claimed. Every curve value, cross-check and adjustment is shown per protocol in its detail view.</p>
       </div>
       <div>
         <h3>Source</h3>

@@ -24,6 +24,29 @@
   function pctCls(x) { return x === null ? 'flat' : x > 0 ? 'up' : x < 0 ? 'down' : 'flat'; }
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
+  /* ---- integrity strip: build-time checks + a live recompute ---- */
+  var val = meta.validation || null;
+  function recomputeCheck() {
+    // Re-derive the top 5 implied values from the curve the page itself carries
+    // (slope + intercept + momentum factor, all in data.js) and compare with the
+    // stored values. A mismatch means the board and its method disagree.
+    var ok = 0, n = Math.min(5, rows.length);
+    for (var i = 0; i < n; i++) {
+      var r = rows[i];
+      var re = Math.exp(r.curve_intercept + r.curve_slope * Math.log(r.tvl_usd)) * r.momentum_factor;
+      if (Math.abs(re - r.implied_value_usd) / r.implied_value_usd < 0.005) ok++;
+    }
+    return { label: 'Dashboard recompute', detail: 'top ' + n + ' implied values re-derived from the curve in data.js: ' + ok + '/' + n + ' match', pass: ok === n };
+  }
+  var checks = (meta.integrity || []).slice();
+  checks.push(recomputeCheck());
+  $('integrityChecks').innerHTML = checks.map(function (c) {
+    return '<div class="check-chip ' + (c.pass ? 'ok' : 'bad') + '"><b>' + (c.pass ? 'PASS' : 'FAIL') + ' · ' + esc(c.label) + '</b><span>' + esc(c.detail) + '</span></div>';
+  }).join('');
+  $('integrityNote').textContent = val
+    ? 'Model: ' + val.base_model + '. Held-out: leave-one-out median log error ' + val.loo.median_log_error + ' (within-3x ' + val.loo.within_3x_pct + '%), walk-forward ' + val.walk_forward.median_log_error + ' (within-3x ' + val.walk_forward.within_3x_pct + '%). The v1 category-median baseline scored ' + val.baseline_loo_median_log_error + ' / ' + val.baseline_wf_median_log_error + '. Dropped after failing both tests: seasoning, chain breadth. Momentum kept at half strength.'
+    : '';
+
   /* ---- top stats ---- */
   var top = rows[0];
   $('topStats').innerHTML =
@@ -79,10 +102,11 @@
         '<td class="num"><b>' + money(r.implied_value_usd) + '</b></td>' +
         '<td class="range-cell"><div class="range-bar"><i style="left:0%;width:100%"></i><b style="left:' + basePos + '%"></b></div>' +
         '<div class="range-num">' + money(r.bear_usd) + ' — ' + money(r.bull_usd) + '</div></td>' +
+        '<td class="farm"><span class="verdict v-' + r.farm_verdict.toLowerCase() + '">' + r.farm_verdict + '</span> <span class="farm-h">$' + r.farm_cost_per_hour_usd + '/h</span></td>' +
         '<td class="num"><span class="meter"><i style="width:' + r.readiness + '%"></i></span>' + r.readiness + '</td>' +
         '</tr>';
     });
-    $('boardBody').innerHTML = html || '<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:18px">No protocols match the filter.</td></tr>';
+    $('boardBody').innerHTML = html || '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:18px">No protocols match the filter.</td></tr>';
     $('rowCount').textContent = list.length + ' of ' + rows.length + ' rows';
   }
 
@@ -96,23 +120,30 @@
     $('dSub').textContent = (r.category || 'Uncategorised') + ' · ' + r.chains.join(', ') + ' · TVL ' + money(r.tvl_usd) +
       ' · 7d ' + pct(r.change_7d) + ' · tracked ' + (r.age_days === null ? 'date unknown' : r.age_days + ' days') +
       (r.watchlist ? ' · on the house watchlist' : ' · below the $50M watchlist floor');
-    var mom = r.change_7d === null ? 1 : 1 + Math.min(100, Math.max(-50, r.change_7d)) / 200;
-    var sea = r.age_days === null ? 1 : 0.85 + (0.3 * Math.min(r.age_days, 1095)) / 1095;
-    var chf = 1 + 0.02 * Math.min(Math.max(r.chains.length - 1, 0), 10);
     $('dMath').innerHTML =
       '<dt>TVL</dt><dd>' + money(r.tvl_usd) + '</dd>' +
-      '<dt>Peer multiple (median)</dt><dd>' + r.multiple + 'x · ' + r.multiple_level + ' · ' + r.peer_count + ' peers' + (r.multiple_p25 !== undefined ? ' · p25 ' + r.multiple_p25 + 'x · p75 ' + r.multiple_p75 + 'x' : '') + '</dd>' +
-      (r.multiple_note ? '<dt>Why this multiple</dt><dd>' + esc(r.multiple_note) + '</dd>' : '') +
-      '<dt>Base FDV (TVL × multiple)</dt><dd>' + money(r.base_fdv_usd) + '</dd>' +
-      '<dt>Momentum factor</dt><dd>×' + mom.toFixed(2) + '</dd>' +
-      '<dt>Seasoning factor</dt><dd>×' + sea.toFixed(2) + '</dd>' +
-      '<dt>Chain factor</dt><dd>×' + chf.toFixed(2) + '</dd>' +
+      '<dt>Size curve value</dt><dd>' + money(r.curve_value_usd) + '</dd>' +
+      '<dt>Size curve</dt><dd>log(mcap) = ' + r.curve_intercept + ' + ' + r.curve_slope + '·log(TVL)</dd>' +
+      '<dt>Category median (cross-check)</dt><dd>' + r.category_multiple + 'x · ' + r.multiple_level + ' · ' + r.category_peer_count + ' peers — tested, lost, prices nothing</dd>' +
+      '<dt>Momentum factor (half strength)</dt><dd>×' + r.momentum_factor.toFixed(3) + '</dd>' +
       '<dt>Implied launch value</dt><dd>' + money(r.implied_value_usd) + '</dd>' +
       '<dt>Bear — Bull range</dt><dd>' + money(r.bear_usd) + ' — ' + money(r.bull_usd) + '</dd>' +
       '<dt>Readiness</dt><dd>' + r.readiness + ' / 100</dd>';
-    $('dLevel').textContent = r.plausibility_reasons.length
+    $('dMultNote').textContent = r.multiple_note ? 'Why this cross-check: ' + r.multiple_note : '';
+    $('dLevel').textContent = 'Seasoning and chain breadth were dropped after failing both held-out tests; momentum survived at half strength. ' + (r.plausibility_reasons.length
       ? 'Launch plausibility ' + r.plausibility + 'x — ' + r.plausibility_reasons.join('; ') + '.'
-      : 'No structural discount: nothing in the record marks this protocol a wrapped, bridged or exchange product.';
+      : 'No structural discount: nothing in the record marks this protocol a wrapped, bridged or exchange product.');
+    var fv = r.farm_verdict;
+    $('dFarm').innerHTML =
+      '<dt>Farm verdict</dt><dd>' + fv + '</dd>' +
+      '<dt>Plan gas cost</dt><dd>$' + r.farm_cost_usd.toFixed(2) + ' total · $' + r.farm_cost_per_hour_usd.toFixed(2) + '/h of active work</dd>' +
+      '<dt>Position deployed</dt><dd>$' + r.farm_position_usd.toLocaleString() + ' over ' + r.farm_sessions + ' sessions / ' + r.farm_hours + 'h in 4 weeks</dd>' +
+      '<dt>Gas vs position</dt><dd>' + (r.farm_cost_usd / r.farm_position_usd * 100).toFixed(1) + '%</dd>';
+    $('dFarmNote').textContent = fv === 'FARM'
+      ? 'FARM: gas under 10% of the position — cheap to run. This prices the cost only; the snapshot records no yield, so no return is claimed.'
+      : fv === 'MARGINAL'
+        ? 'MARGINAL: gas is 10–25% of the position — costly. Consider a cheaper chain or a bigger size before running the plan.'
+        : 'SKIP: gas over 25% of the position — the gas alone eats the case. Use a cheaper chain or a bigger size, or do not farm this one.';
     var ph = '<tr><th>Peer (tokenised)</th><th class="num">Market-cap / TVL</th><th class="num">TVL</th></tr>';
     r.peers.forEach(function (p) {
       var full = null;

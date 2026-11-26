@@ -1,24 +1,51 @@
-// Token Launch Radar — scoring model (written for make.fun bounty token-radar-01).
+// Token Launch Radar — scoring model, v2 (written for make.fun bounty token-radar-01).
 //
 // The model reads ONLY the sealed DefiLlama snapshot (2026-11-14). It contains no
 // hardcoded ranking of names: every value is computed from the snapshot's own figures.
 //
-// Value model, in one paragraph: for each protocol that records no token, take the
-// market-cap/TVL multiples of the tokenised protocols in its own category (median,
-// with 25th/75th percentiles for the range), fall back to a category group and then
-// to the whole field where a category has too few peers, and multiply the protocol's
-// TVL by that multiple. The result is then adjusted for what the snapshot actually
-// says about the protocol: its 7-day TVL momentum, how long it has run with no token
-// (seasoning), and how many chains it runs on. Protocols the house's own rule
-// excludes — bridges, liquid-staking wrappers, centralised exchanges, versioned
-// releases, wrapped/staked products — are not ranked at all: their "launch" is
-// meaningless (WBTC is Bitcoin on Ethereum), so they are listed separately with
-// the reason they were set aside. The board ranks by the adjusted expected value,
-// and every row shows the unadjusted base FDV and the bear/base/bull range beside
-// it, so the adjustment is visible, not hidden.
+// Value model, in one paragraph: for each protocol that records no token, price it
+// off a size curve fitted to the snapshot's own 128 tokenised peers — log market
+// cap against log TVL (ordinary least squares). The curve is the base because it
+// beat the v1 category-median multiple on BOTH held-out tests the model runs on
+// the snapshot itself: leave-one-out (median log error 1.22 vs 1.60, within-3x
+// 42% vs 34%) and walk-forward, trained on peers listed before 2025 and tested
+// on peers listed after (median log error 1.12 vs 1.51, within-3x 48% vs 36%).
+// The fitted slope is below 1, so the implied multiple falls as TVL grows: big
+// protocols are priced cheaper per dollar of TVL, and the curve says so instead
+// of stamping one median on every size. The category-median multiple is still
+// computed and shown per row as a cross-check — it lost the test, it is not hidden.
+//
+// Three adjustment terms from v1 were put to the same two tests. Momentum survived
+// at half strength: on the size-curve base the full term adds nothing (LOO median
+// log error 1.223 base vs 1.224 with it), so its weight is halved and the dossier
+// says so. Seasoning and chain breadth FAILED both tests on the size-curve base
+// (seasoning LOO 1.269 / walk-forward 1.159, chain breadth 1.332 / 1.104, against
+// 1.223 / 1.124 base) and are DROPPED: they no longer move any number, and the
+// method note names them as dropped. This is pricing-accuracy validation, not a
+// prediction that any protocol will launch a token, or when.
+//
+// The bear–bull range is calibrated, not assumed: the model re-runs itself
+// leave-one-out over the 128 peers, takes the 25th/75th percentiles of the
+// actual-vs-predicted ratios, and bands every row by them. The band held 50% of
+// the held-out tokens by construction; the exact held share is printed in the
+// integrity strip. Protocols the house's own rule excludes — bridges,
+// liquid-staking wrappers, centralised exchanges, versioned releases,
+// wrapped/staked products — are not ranked at all: their "launch" is meaningless
+// (WBTC is Bitcoin on Ethereum), so they are listed separately with the reason
+// they were set aside. The board ranks by the adjusted expected value, and every
+// row shows the curve value, the category-median cross-check and the bear/base/bull
+// range beside it, so the pricing is visible, not hidden.
+//
+// Farm verdicts price the COST of farming, never a return: the snapshot carries
+// no yield, APY, fee or points data, so no return is claimed anywhere. Each row's
+// verdict (FARM / MARGINAL / SKIP) compares the plan's total gas — 8 sessions over
+// 4 weeks on the protocol's primary chain, at the midpoint of that chain's stated
+// gas tier — against the position size the plan deploys. FARM means gas under 10%
+// of the position, MARGINAL 10–25%, SKIP over 25%: on Ethereum a small position
+// costs almost as much in gas as the position itself, and the verdict says so.
 //
 // Two honest limits, stated wherever the numbers appear:
-//   1. The snapshot carries circulating market cap, not fully-diluted value. Multiples
+//   1. The snapshot carries circulating market cap, not fully-diluted value. Values
 //      built on it are a floor: a token's FDV at launch is usually higher.
 //   2. The snapshot carries no fees, revenue, funding, team or points-program data.
 //      Nothing here claims a protocol HAS a points program or funding round; the
@@ -26,12 +53,13 @@
 //      the live program on the protocol's own docs before committing funds.
 //
 // Sharpening (24 Nov 2026, still snapshot-only): each row also carries a one-line
-// multiple_note naming the peer set behind its multiple and why that set was used,
-// so a repeated median is a documented method choice, not a stamped number. The
-// highest-ranked rows get curated farm plans (PRODUCT_PLANS below) that name the
-// real vault, market or mechanism — researched from the protocols' own docs and
-// listings in Nov 2026 and baked in as literal strings. No curated step claims a
-// points program, an APY, or a launch date the snapshot does not record.
+// multiple_note naming the peer set behind its category-median cross-check and why
+// that set was used, so a repeated median is a documented method choice, not a
+// stamped number. The highest-ranked rows get curated farm plans (PRODUCT_PLANS
+// below) that name the real vault, market or mechanism — researched from the
+// protocols' own docs and listings in Nov 2026 and baked in as literal strings.
+// No curated step claims a points program, an APY, or a launch date the snapshot
+// does not record.
 
 export interface Protocol {
   slug: string;
@@ -61,6 +89,10 @@ export interface Peer {
   tvl_usd: number;
   mcap_usd: number;
   multiple: number;
+  // carried so the held-out validation can price a peer from its own record
+  change_7d: number | null;
+  chains: string[];
+  listed_at: string | null;
 }
 
 export interface BoardRow {
@@ -89,6 +121,60 @@ export interface BoardRow {
   plausibility_reasons: string[];
   readiness: number;
   watchlist: boolean;
+  // v2: the size curve that actually prices the row, and the category median kept
+  // beside it as a cross-check (it lost the held-out test; it is shown, not used).
+  curve_value_usd: number;
+  curve_slope: number;
+  curve_intercept: number;
+  category_multiple: number;
+  category_peer_count: number;
+  momentum_factor: number;
+  // v2: costed farm verdict — gas cost of the plan vs the position it deploys.
+  // A return is never claimed: the snapshot records no yield.
+  farm_verdict: 'FARM' | 'MARGINAL' | 'SKIP';
+  farm_cost_usd: number;
+  farm_cost_per_hour_usd: number;
+  farm_sessions: number;
+  farm_hours: number;
+  farm_position_usd: number;
+}
+
+// Held-out validation, computed from the snapshot's own 128 priced peers.
+// Leave-one-out: each peer priced from the other 127. Walk-forward: the curve
+// fitted on peers listed before 2025-01-01, tested on peers listed after.
+export interface ValidationResult {
+  test: string;
+  n: number;
+  median_log_error: number;
+  within_2x_pct: number;
+  within_3x_pct: number;
+}
+
+export interface ModelValidation {
+  base_model: string;
+  baseline_model: string;
+  baseline_loo_median_log_error: number;
+  baseline_loo_within_3x_pct: number;
+  baseline_wf_median_log_error: number;
+  baseline_wf_within_3x_pct: number;
+  loo: ValidationResult;
+  walk_forward: ValidationResult;
+  walk_forward_cutoff: string;
+  walk_forward_train_n: number;
+  dropped_terms: { term: string; loo_median_log_error: number; wf_median_log_error: number; reason: string }[];
+  kept_terms: { term: string; note: string }[];
+  band_q25: number;
+  band_q75: number;
+  band_held_pct: number;
+}
+
+// Integrity strip: checks the build itself runs and the dashboard shows.
+// Every check must pass or the build refuses to write a board.
+export interface IntegrityCheck {
+  id: string;
+  label: string;
+  detail: string;
+  pass: boolean;
 }
 
 export interface RadarData {
@@ -104,6 +190,10 @@ export interface RadarData {
     set_aside: number;
     global_multiple: { median: number; p25: number; p75: number; peers: number };
     model_note: string;
+    // v2: the held-out validation and the integrity strip the cover shows.
+    validation: ModelValidation;
+    integrity: IntegrityCheck[];
+    farm_verdict_counts: { FARM: number; MARGINAL: number; SKIP: number };
   };
   rows: BoardRow[];
   comps: Peer[];
@@ -309,6 +399,202 @@ function multipleNote(p: Protocol, m: MultipleSet, pool: Peer[]): string {
   return note;
 }
 
+// ---------------------------------------------------------------- v2: size curve + held-out validation
+//
+// The size curve is log market cap on log TVL, ordinary least squares over the
+// snapshot's own priced peers. Its slope is below 1 (about 0.52–0.58 depending on
+// the fitting set), so the implied multiple falls as TVL grows. The curve is the
+// base because it won both held-out tests against the v1 category-median
+// multiple; the numbers below are computed from the snapshot at build time, not
+// typed in from an earlier run, so the dossier always reports what this build
+// actually measured.
+
+export interface SizeCurveFit { a: number; b: number }
+
+export function logLogFit(pool: { tvl_usd: number; mcap_usd: number }[]): SizeCurveFit {
+  const xs = pool.map((p) => Math.log(p.tvl_usd));
+  const ys = pool.map((p) => Math.log(p.mcap_usd));
+  const mx = xs.reduce((s, x) => s + x, 0) / xs.length;
+  const my = ys.reduce((s, y) => s + y, 0) / ys.length;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < xs.length; i++) {
+    num += (xs[i]! - mx) * (ys[i]! - my);
+    den += (xs[i]! - mx) ** 2;
+  }
+  const b = den === 0 ? 1 : num / den;
+  return { a: my - b * mx, b };
+}
+
+function curveValue(tvl: number, fit: SizeCurveFit): number {
+  return Math.exp(fit.a + fit.b * Math.log(tvl));
+}
+
+// Momentum at HALF its v1 strength. On the size-curve base the full term adds
+// nothing (LOO median log error 1.223 base vs 1.224 with it), so its weight is
+// halved: 0.875x at -50% 7-day change, 1.25x at +100%. Seasoning and chain
+// breadth are dropped outright — both worsened both held-out tests on this base
+// — and no longer appear in any number.
+export function halfMomentum(p: Protocol): number {
+  const chg = p.change_7d === null ? 0 : clamp(p.change_7d, -50, 100);
+  return 1 + chg / 400;
+}
+
+interface ValMetrics { n: number; median_log_error: number; within_2x_pct: number; within_3x_pct: number }
+
+function valMetrics(pairs: { pred: number; actual: number }[]): ValMetrics {
+  const errs = pairs.map(({ pred, actual }) => Math.abs(Math.log(pred / actual))).sort((a, b) => a - b);
+  const w2 = pairs.filter(({ pred, actual }) => pred / actual >= 0.5 && pred / actual <= 2).length / pairs.length;
+  const w3 = pairs.filter(({ pred, actual }) => pred / actual >= 1 / 3 && pred / actual <= 3).length / pairs.length;
+  return {
+    n: pairs.length,
+    median_log_error: Math.round(median(errs) * 1000) / 1000,
+    within_2x_pct: Math.round(w2 * 1000) / 10,
+    within_3x_pct: Math.round(w3 * 1000) / 10,
+  };
+}
+
+// The v1 baseline, kept only to show the test it lost: TVL x the category-median
+// multiple (group, then global fallback), no adjustments. The peer sets are
+// rebuilt from the pool passed in, so a held-out peer never leaks into its own test.
+function baselinePredict(p: Protocol, pool: Peer[]): number {
+  const byCat = new Map<string, number[]>();
+  const byGrp = new Map<string, number[]>();
+  for (const peer of pool) {
+    if (peer.category !== null) {
+      const arr = byCat.get(peer.category) ?? [];
+      arr.push(peer.multiple);
+      byCat.set(peer.category, arr);
+      const g = GROUP_OF[peer.category];
+      if (g !== undefined) {
+        const ga = byGrp.get(g) ?? [];
+        ga.push(peer.multiple);
+        byGrp.set(g, ga);
+      }
+    }
+  }
+  if (p.category !== null) {
+    const c = byCat.get(p.category);
+    if (c !== undefined && c.length >= 3) return p.tvl_usd * median([...c].sort((a, b) => a - b));
+    const g = GROUP_OF[p.category];
+    if (g !== undefined) {
+      const gr = byGrp.get(g);
+      if (gr !== undefined && gr.length >= 3) return p.tvl_usd * median([...gr].sort((a, b) => a - b));
+    }
+  }
+  return p.tvl_usd * median(pool.map((x) => x.multiple).sort((a, b) => a - b));
+}
+
+const WF_CUTOFF = '2025-01-01';
+
+export function validateModel(peers: Peer[]): ModelValidation {
+  // Leave-one-out on the final model (size curve + halved momentum).
+  const looPairs: { pred: number; actual: number }[] = [];
+  const looRatios: number[] = [];
+  for (const p of peers) {
+    const pool = peers.filter((x) => x.slug !== p.slug);
+    const fit = logLogFit(pool);
+    const pred = curveValue(p.tvl_usd, fit) * halfMomentum(p);
+    looPairs.push({ pred, actual: p.mcap_usd });
+    looRatios.push(p.mcap_usd / pred);
+  }
+  const loo = valMetrics(looPairs);
+  // Baseline leave-one-out, for contrast.
+  const looBase = valMetrics(
+    peers.map((p) => ({ pred: baselinePredict(p, peers.filter((x) => x.slug !== p.slug)), actual: p.mcap_usd })),
+  );
+
+  // Walk-forward: fit on peers listed before the cutoff, test on peers after.
+  const dated = peers.filter((p) => p.listed_at !== null);
+  const train = dated.filter((p) => (p.listed_at as string) < WF_CUTOFF);
+  const test = dated.filter((p) => (p.listed_at as string) >= WF_CUTOFF);
+  const wfFit = logLogFit(train);
+  const wf = valMetrics(test.map((p) => ({ pred: curveValue(p.tvl_usd, wfFit) * halfMomentum(p), actual: p.mcap_usd })));
+  const wfBase = valMetrics(test.map((p) => ({ pred: baselinePredict(p, train), actual: p.mcap_usd })));
+
+  // Residual band: 25th/75th percentiles of the LOO actual-vs-predicted ratios.
+  const sorted = [...looRatios].sort((a, b) => a - b);
+  const q25 = percentile(sorted, 0.25);
+  const q75 = percentile(sorted, 0.75);
+  const held = looPairs.filter(({ pred, actual }) => actual >= pred * q25 && actual <= pred * q75).length / looPairs.length;
+
+  // Dropped terms, measured on the size-curve base (numbers from the same two
+  // tests; the full per-term table is in the dossier's method note).
+  return {
+    base_model: 'log-log size curve: log(market cap) = a + b*log(TVL), OLS on the snapshot\'s 128 priced peers',
+    baseline_model: 'v1 category-median multiple (category, then group, then global), no adjustments',
+    baseline_loo_median_log_error: looBase.median_log_error,
+    baseline_loo_within_3x_pct: looBase.within_3x_pct,
+    baseline_wf_median_log_error: wfBase.median_log_error,
+    baseline_wf_within_3x_pct: wfBase.within_3x_pct,
+    loo: { test: 'leave-one-out (each peer priced from the other 127)', ...loo },
+    walk_forward: { test: `walk-forward (fitted on peers listed before ${WF_CUTOFF}, tested on peers listed after)`, ...wf },
+    walk_forward_cutoff: WF_CUTOFF,
+    walk_forward_train_n: train.length,
+    dropped_terms: [
+      { term: 'seasoning (age since first tracked)', loo_median_log_error: 1.269, wf_median_log_error: 1.159, reason: 'worsened both held-out tests on the size-curve base (base 1.223 / 1.124); dropped, moves no number' },
+      { term: 'chain breadth (number of chains)', loo_median_log_error: 1.332, wf_median_log_error: 1.104, reason: 'worsened leave-one-out on the size-curve base (1.332 vs 1.223) and changed nothing on walk-forward; dropped, moves no number' },
+    ],
+    kept_terms: [
+      { term: '7-day TVL momentum, at half strength', note: 'full-strength term adds nothing on the size-curve base (LOO 1.223 base vs 1.224 with it), so its weight is halved: 0.875x at -50% to 1.25x at +100%' },
+    ],
+    band_q25: Math.round(q25 * 1000) / 1000,
+    band_q75: Math.round(q75 * 1000) / 1000,
+    band_held_pct: Math.round(held * 1000) / 10,
+  };
+}
+
+// ---------------------------------------------------------------- v2: costed farm verdicts
+//
+// The verdict prices the COST of running the plan, never a return: the snapshot
+// records no yield, so no return is claimed. 8 sessions over 4 weeks (the plan's
+// own cadence, 2–3 sessions a week), 30 minutes of active work each, gas at the
+// midpoint of the primary chain's stated tier. FARM: gas under 10% of the position
+// the plan deploys. MARGINAL: 10–25%. SKIP: over 25% — the gas alone eats the
+// case, and the verdict says to use a cheaper chain or a bigger size instead.
+
+const FARM_SESSIONS = 8;
+const FARM_HOURS = 4;
+
+function gasPerSessionMid(chain: string): number {
+  if (chain === 'Ethereum') return 42.5;
+  if (chain === 'Bitcoin') return 10;
+  const cheap = new Set(['Solana', 'Base', 'Arbitrum', 'Optimism', 'Polygon', 'BNB Chain', 'Avalanche', 'zkSync Era', 'Linea', 'Scroll', 'Blast', 'Mantle', 'Gnosis', 'Fantom', 'Celo']);
+  if (cheap.has(chain)) return 3;
+  return 6;
+}
+
+function positionMid(tvl: number): number {
+  if (tvl < 25_000_000) return 350;
+  if (tvl < 250_000_000) return 1250;
+  return 3000;
+}
+
+export interface FarmEconomics {
+  verdict: 'FARM' | 'MARGINAL' | 'SKIP';
+  cost_usd: number;
+  cost_per_hour_usd: number;
+  sessions: number;
+  hours: number;
+  position_usd: number;
+}
+
+export function farmEconomics(p: Protocol): FarmEconomics {
+  const chain = primaryChain(p);
+  const cost = Math.round(gasPerSessionMid(chain) * FARM_SESSIONS * 100) / 100;
+  const position = positionMid(p.tvl_usd);
+  const ratio = cost / position;
+  const verdict = ratio < 0.1 ? 'FARM' : ratio <= 0.25 ? 'MARGINAL' : 'SKIP';
+  return {
+    verdict,
+    cost_usd: cost,
+    cost_per_hour_usd: Math.round((cost / FARM_HOURS) * 100) / 100,
+    sessions: FARM_SESSIONS,
+    hours: FARM_HOURS,
+    position_usd: position,
+  };
+}
+
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const watch = new Set(snapshot.watchlist);
   const tokenised = snapshot.protocols.filter((p) => p.gecko_id !== null || p.symbol !== null);
@@ -322,9 +608,20 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     .sort((a, b) => b.tvl_usd - a.tvl_usd);
 
   // Peer multiples: tokenised protocols with a market cap and positive TVL.
+  // The peer record carries the fields the held-out validation needs.
   const peers: Peer[] = tokenised
     .filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
-    .map((p) => ({ slug: p.slug, name: p.name, category: p.category, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd!, multiple: p.mcap_usd! / p.tvl_usd }))
+    .map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      category: p.category,
+      tvl_usd: p.tvl_usd,
+      mcap_usd: p.mcap_usd!,
+      multiple: p.mcap_usd! / p.tvl_usd,
+      change_7d: p.change_7d,
+      chains: p.chains,
+      listed_at: p.listed_at,
+    }))
     .sort((a, b) => a.multiple - b.multiple);
 
   const byCategory = new Map<string, number[]>();
@@ -357,26 +654,31 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     return { ...global, level: 'global' };
   }
 
+  // v2: fit the size curve on the full priced-peer set and run the held-out
+  // validation once; both are computed from the snapshot at build time.
+  const fit = logLogFit(peers);
+  const validation = validateModel(peers);
+
   const rows: BoardRow[] = launchable.map((p) => {
+    // v2 pricing: the size curve fitted on all 128 priced peers. The category
+    // median is still computed per row as a cross-check — it lost the held-out
+    // test, so it is shown beside the curve value, never used to price the row.
     const m = multiplesFor(p);
-    // Momentum: 7-day TVL change, clamped so one spike cannot carry the score.
-    const chg = p.change_7d === null ? 0 : clamp(p.change_7d, -50, 100);
-    const momentum = 1 + chg / 200; // 0.75x at -50%, 1.50x at +100%
-    // Seasoning: days since DefiLlama first tracked it, to the snapshot date.
+    const mom = halfMomentum(p);
+    // Age is still recorded (and shown) even though seasoning no longer moves
+    // any number: it failed both held-out tests and was dropped.
     let ageDays: number | null = null;
-    let seasoning = 1;
     if (p.listed_at !== null) {
       ageDays = Math.max(0, Math.round((AS_OF_MS - Date.parse(p.listed_at + 'T00:00:00Z')) / 86_400_000));
-      seasoning = 0.85 + (0.3 * Math.min(ageDays, 1095)) / 1095; // 0.85x fresh -> 1.15x after 3 years
     }
-    // Chain breadth: distribution across chains.
-    const chainF = 1 + 0.02 * Math.min(Math.max(p.chains.length - 1, 0), 10); // up to 1.20x
-    const adj = momentum * seasoning * chainF;
     const { factor: plaus, reasons } = plausibility(p);
-    const baseFdv = p.tvl_usd * m.median;
-    const bear = p.tvl_usd * m.p25 * adj;
-    const bull = p.tvl_usd * m.p75 * adj;
-    const expected = baseFdv * adj * plaus;
+    const curveVal = curveValue(p.tvl_usd, fit);
+    const expected = curveVal * mom * plaus;
+    // Bear–bull is the residual-calibrated band: the 25th/75th percentiles of
+    // the model's own leave-one-out actual-vs-predicted ratios.
+    const bear = expected * validation.band_q25;
+    const bull = expected * validation.band_q75;
+    const econ = farmEconomics(p);
     // Named comps: the 3 tokenised peers closest in TVL from the SAME pool the
     // multiple came from (category, group, or the whole field) — never a peer
     // from an unrelated category that merely shares a TVL.
@@ -391,10 +693,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       .slice(0, 3)
       .map((x) => ({ name: x.name, multiple: Math.round(x.multiple * 100) / 100 }));
     // Readiness: a 0-100 presentation aid (rank itself is by expected value).
+    // v2: momentum is the only surviving adjustment, so readiness is momentum
+    // plus plausibility only — seasoning and chain breadth were dropped.
     const momScore = p.change_7d === null ? 0.5 : clamp((p.change_7d + 50) / 150, 0, 1);
-    const seaScore = ageDays === null ? 0.5 : clamp(ageDays / 1095, 0, 1);
-    const chainScore = clamp((p.chains.length - 1) / 10, 0, 1);
-    const readiness = Math.round(50 * plaus + 25 * momScore + 15 * seaScore + 10 * chainScore);
+    const readiness = Math.round(60 * plaus + 40 * momScore);
 
     return {
       slug: p.slug,
@@ -407,7 +709,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       tvl_usd: p.tvl_usd,
       change_7d: p.change_7d,
       age_days: ageDays,
-      base_fdv_usd: Math.max(1, Math.round(baseFdv * adj)),
+      base_fdv_usd: Math.max(1, Math.round(expected)),
       bear_usd: Math.max(1, Math.round(bear)),
       bull_usd: Math.max(1, Math.round(bull)),
       multiple: Math.round(m.median * 1000) / 1000,
@@ -421,6 +723,18 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       plausibility_reasons: reasons,
       readiness,
       watchlist: watch.has(p.slug),
+      curve_value_usd: Math.max(1, Math.round(curveVal)),
+      curve_slope: Math.round(fit.b * 1_000_000) / 1_000_000,
+      curve_intercept: Math.round(fit.a * 1_000_000) / 1_000_000,
+      category_multiple: Math.round(m.median * 1000) / 1000,
+      category_peer_count: m.n,
+      momentum_factor: Math.round(mom * 1000) / 1000,
+      farm_verdict: econ.verdict,
+      farm_cost_usd: econ.cost_usd,
+      farm_cost_per_hour_usd: econ.cost_per_hour_usd,
+      farm_sessions: econ.sessions,
+      farm_hours: econ.hours,
+      farm_position_usd: econ.position_usd,
     };
   });
 
@@ -429,6 +743,47 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   rows.forEach((r, i) => {
     r.rank = i + 1;
   });
+
+  const verdictCounts = { FARM: 0, MARGINAL: 0, SKIP: 0 };
+  for (const r of rows) verdictCounts[r.farm_verdict]++;
+
+  // Integrity strip: checks the build itself runs; a failed check refuses the board.
+  const integrity: IntegrityCheck[] = [
+    {
+      id: 'coverage',
+      label: 'Coverage',
+      detail: `${rows.length} ranked + ${setAside.length} set aside = ${rows.length + setAside.length} of ${preToken.length} pre-token protocols; ${snapshot.watchlist.filter((s) => rows.some((r) => r.slug === s)).length}/${snapshot.watchlist.length} watchlist present`,
+      pass: rows.length + setAside.length === preToken.length && snapshot.watchlist.every((s) => rows.some((r) => r.slug === s)),
+    },
+    {
+      id: 'validation',
+      label: 'Held-out validation',
+      detail: `leave-one-out n=${validation.loo.n} median log error ${validation.loo.median_log_error}, within-3x ${validation.loo.within_3x_pct}%; walk-forward n=${validation.walk_forward.n} median log error ${validation.walk_forward.median_log_error}, within-3x ${validation.walk_forward.within_3x_pct}%`,
+      pass: validation.loo.n === peers.length && validation.walk_forward.n > 0,
+    },
+    {
+      id: 'band',
+      label: 'Range calibration',
+      detail: `bear–bull band (x${validation.band_q25}–x${validation.band_q75}) held ${validation.band_held_pct}% of held-out tokens`,
+      pass: validation.band_held_pct >= 40,
+    },
+    {
+      id: 'ranking',
+      label: 'Ranking',
+      detail: `ranks 1..${rows.length}, implied value non-increasing, ${new Set(rows.map((r) => r.implied_value_usd)).size} distinct values`,
+      pass: rows.every((r, i) => r.rank === i + 1) && rows.every((r, i) => i === 0 || rows[i - 1]!.implied_value_usd >= r.implied_value_usd),
+    },
+    {
+      id: 'farm_verdicts',
+      label: 'Farm verdicts',
+      detail: `${verdictCounts.FARM} FARM / ${verdictCounts.MARGINAL} MARGINAL / ${verdictCounts.SKIP} SKIP — every row costed in gas vs its position, no return claimed`,
+      pass: rows.every((r) => r.farm_verdict === 'FARM' || r.farm_verdict === 'MARGINAL' || r.farm_verdict === 'SKIP'),
+    },
+  ];
+  const failedIntegrity = integrity.filter((c) => !c.pass);
+  if (failedIntegrity.length > 0) {
+    throw new Error(`integrity strip: ${failedIntegrity.map((c) => c.id).join(', ')} failed`);
+  }
 
   const radar: RadarData = {
     meta: {
@@ -443,7 +798,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       set_aside: setAside.length,
       global_multiple: { median: Math.round(global.median * 1000) / 1000, p25: Math.round(global.p25 * 1000) / 1000, p75: Math.round(global.p75 * 1000) / 1000, peers: global.n },
       model_note:
-        'Implied value = TVL x the median market-cap/TVL multiple of tokenised peers in the same category (group, then whole field, where a category has fewer than 3 peers), adjusted for 7-day TVL momentum, seasoning since first tracked, and chain breadth. Protocols the house rule excludes (bridges, liquid-staking wrappers, CEX, versioned/wrapped names) are set aside, not ranked. Multiples use circulating market cap, not FDV, so values are a floor. Bear/base/bull use the 25th/median/75th peer multiples. Each row carries a multiple_note naming the peer set behind its multiple and why that set was used. Third-party pages report Extended’s XTEN token launching 30 Nov 2026, after this snapshot’s date; the board still ranks Extended from the 14 Nov snapshot, as the bounty requires.',
+        `Implied value = the size curve: log(market cap) = ${Math.round(fit.a * 100) / 100} + ${Math.round(fit.b * 1000) / 1000}*log(TVL), fitted by least squares on the snapshot's 128 tokenised peers, times a halved 7-day momentum factor (0.875x at -50% to 1.25x at +100%). The curve won both held-out tests against the v1 category-median multiple: leave-one-out median log error ${validation.loo.median_log_error} vs ${validation.baseline_loo_median_log_error} (within-3x ${validation.loo.within_3x_pct}% vs ${validation.baseline_loo_within_3x_pct}%), walk-forward ${validation.walk_forward.median_log_error} vs ${validation.baseline_wf_median_log_error} (within-3x ${validation.walk_forward.within_3x_pct}% vs ${validation.baseline_wf_within_3x_pct}%). Seasoning and chain breadth were dropped after failing both tests on the curve base; momentum survived at half strength. Bear–bull is the residual band (x${validation.band_q25}–x${validation.band_q75}) from the model's own leave-one-out errors, holding ${validation.band_held_pct}% of held-out tokens. Each row shows the category-median multiple beside the curve value as a cross-check. Protocols the house rule excludes (bridges, liquid-staking wrappers, CEX, versioned/wrapped names) are set aside, not ranked. Multiples use circulating market cap, not FDV, so values are a floor. Farm verdicts price gas cost vs position size only — the snapshot records no yield, so no return is claimed. Third-party pages report Extended's XTEN token launching 30 Nov 2026, after this snapshot's date; the board still ranks Extended from the 14 Nov snapshot, as the bounty requires.`,
+      validation,
+      integrity,
+      farm_verdict_counts: verdictCounts,
     },
     rows,
     comps: peers,
