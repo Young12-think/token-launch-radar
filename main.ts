@@ -4,6 +4,11 @@
 // model in lib/model.ts, and writes the ranked board, the dashboard data, the
 // dashboard itself, the screenshots and the dossier the judge reads.
 //
+// v3: launchable-only winsorised size curve, full-strength momentum — the
+// curve is fitted on the priced peers that pass the house exclusion rule, not
+// on every priced peer, and the validation is scored on that population with a
+// full-population cross-check beside it.
+//
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json|dir>
 //
 // In the grader the snapshot is mounted at /input and the output at /output.
@@ -43,15 +48,17 @@ if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
   process.exit(1);
 }
-// v2: the integrity strip is computed by buildRadar and refuses the build on
+// v3: the integrity strip is computed by buildRadar and refuses the build on
 // a failed check; print it here so the build log shows what was verified.
 const v = radar.meta.validation;
 for (const c of radar.meta.integrity) {
   process.stdout.write(`token radar: integrity ${c.pass ? 'PASS' : 'FAIL'} ${c.id} — ${c.detail}\n`);
 }
 process.stdout.write(
-  `token radar: validation size-curve LOO n=${v.loo.n} median-log-err=${v.loo.median_log_error} within-3x=${v.loo.within_3x_pct}% | ` +
+  `token radar: validation size-curve launchable peers n=${v.fit_n} (winsor 2σ clipped ${v.winsor_clipped.join(', ') || 'none'}) LOO n=${v.loo.n} median-log-err=${v.loo.median_log_error} within-3x=${v.loo.within_3x_pct}% | ` +
     `walk-forward n=${v.walk_forward.n} median-log-err=${v.walk_forward.median_log_error} within-3x=${v.walk_forward.within_3x_pct}% | ` +
+    `cross-check all peers LOO within-3x=${v.crosscheck_loo.within_3x_pct}% walk-forward within-3x=${v.crosscheck_walk_forward.within_3x_pct}% | ` +
+    `v2 estimator on launchable LOO within-3x=${v.v2_primary_loo.within_3x_pct}% walk-forward within-3x=${v.v2_primary_walk_forward.within_3x_pct}% | ` +
     `band x${v.band_q25}–x${v.band_q75} held ${v.band_held_pct}% | ` +
     `farm verdicts ${radar.meta.farm_verdict_counts.FARM} FARM / ${radar.meta.farm_verdict_counts.MARGINAL} MARGINAL / ${radar.meta.farm_verdict_counts.SKIP} SKIP\n`,
 );

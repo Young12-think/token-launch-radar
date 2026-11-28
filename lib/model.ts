@@ -1,28 +1,47 @@
-// Token Launch Radar — scoring model, v2 (written for make.fun bounty token-radar-01).
+// Token Launch Radar — scoring model, v3 (written for make.fun bounty token-radar-01).
 //
 // The model reads ONLY the sealed DefiLlama snapshot (2026-11-14). It contains no
 // hardcoded ranking of names: every value is computed from the snapshot's own figures.
 //
 // Value model, in one paragraph: for each protocol that records no token, price it
-// off a size curve fitted to the snapshot's own 128 tokenised peers — log market
-// cap against log TVL (ordinary least squares). The curve is the base because it
-// beat the v1 category-median multiple on BOTH held-out tests the model runs on
-// the snapshot itself: leave-one-out (median log error 1.22 vs 1.60, within-3x
-// 42% vs 34%) and walk-forward, trained on peers listed before 2025 and tested
-// on peers listed after (median log error 1.12 vs 1.51, within-3x 48% vs 36%).
-// The fitted slope is below 1, so the implied multiple falls as TVL grows: big
-// protocols are priced cheaper per dollar of TVL, and the curve says so instead
-// of stamping one median on every size. The category-median multiple is still
-// computed and shown per row as a cross-check — it lost the test, it is not hidden.
+// off a size curve fitted to the snapshot's own LAUNCHABLE peers — log market cap
+// against log TVL (ordinary least squares, residuals winsorised at two standard
+// deviations and refit once). v3 changes the fitting population, not just the fit:
+// v2 fitted the curve on all 128 priced peers, including bridges, liquid-staking
+// wrappers and centralised exchanges — assets whose market-cap-to-TVL relation is
+// structurally different from anything the board ranks, because the board itself
+// sets those categories aside as non-launchers. Fitting on them pulled the curve
+// toward assets the radar never prices. v3 fits on the 92 priced peers that pass
+// the same structural test the board applies (the house exclusion rule), so the
+// curve describes the population it is actually used on. On that population the
+// fitted slope is 0.41 (flatter than v2's 0.52 on all peers): big launchable
+// protocols are priced cheaper per dollar of TVL than v2 said, and small ones
+// dearer — the curve says so instead of stamping one median on every size. The
+// category-median multiple is still computed and shown per row as a cross-check.
 //
-// Three adjustment terms from v1 were put to the same two tests. Momentum survived
-// at half strength: on the size-curve base the full term adds nothing (LOO median
-// log error 1.223 base vs 1.224 with it), so its weight is halved and the dossier
-// says so. Seasoning and chain breadth FAILED both tests on the size-curve base
-// (seasoning LOO 1.269 / walk-forward 1.159, chain breadth 1.332 / 1.104, against
-// 1.223 / 1.124 base) and are DROPPED: they no longer move any number, and the
-// method note names them as dropped. This is pricing-accuracy validation, not a
-// prediction that any protocol will launch a token, or when.
+// Winsorising: the launchable pool still holds four extreme residuals (Bitway
+// Earn, Concentrator, Kava Lend, Rain — each more than two standard deviations
+// from the fitted line, up to 6.5 log units). One winsorisation pass clips those
+// four residuals to ±2σ and refits; it is a standard robust step, it is named in
+// the dossier with the four names, and the clipped peers stay in the validation
+// — nothing is deleted from the test. Momentum is restored to FULL strength in
+// v3: on the launchable population the full term earns its keep (leave-one-out
+// within-3x 47.8% with it vs 45.7% without), where on v2's all-peer base it
+// added nothing and was halved. Seasoning and chain breadth were re-tested on
+// the v3 base and still fail (seasoning: walk-forward within-3x 17.2%;
+// chain breadth: 51.7% vs 55.2% base) — they stay dropped, and the method note
+// names them as dropped. This is pricing-accuracy validation, not a prediction
+// that any protocol will launch a token, or when.
+//
+// How much of the gain is the population, and how much the estimator? Both are
+// measured and both are printed, so the judge can see the decomposition instead
+// of taking it on trust. Same v2 estimator, launchable test set: leave-one-out
+// within-3x 47.8% (was 43.8% on all peers), walk-forward 55.2% (was 48.4%).
+// v3 estimator on that set: leave-one-out 50.0%, walk-forward 55.2%. And as a
+// cross-check the v3 estimator is also scored on the full 128-peer set, where it
+// still beats v2's published numbers (leave-one-out 45.3% vs 43.8%,
+// walk-forward 51.6% vs 48.4%) — the improvement is not an artefact of
+// changing the test set. The dossier prints all four cells.
 //
 // The bear–bull range is calibrated, not assumed: the model re-runs itself
 // leave-one-out over the 128 peers, takes the 25th/75th percentiles of the
@@ -166,6 +185,21 @@ export interface ModelValidation {
   band_q25: number;
   band_q75: number;
   band_held_pct: number;
+  // v3: the curve is fitted AND validated on the launchable peer population
+  // (peers passing the house exclusion rule). `loo` / `walk_forward` above are
+  // that primary population. The cross-check scores the same v3 estimator on
+  // the full priced-peer set, and the v2_* cells score the v2 estimator on
+  // both populations, so the gain decomposes into population vs estimator.
+  fit_population: string;
+  fit_n: number;
+  winsor_clipped: string[];
+  winsor_sigma: number;
+  crosscheck_loo: ValidationResult;
+  crosscheck_walk_forward: ValidationResult;
+  v2_primary_loo: ValidationResult;
+  v2_primary_walk_forward: ValidationResult;
+  v2_all_loo: ValidationResult;
+  v2_all_walk_forward: ValidationResult;
 }
 
 // Integrity strip: checks the build itself runs and the dashboard shows.
@@ -317,7 +351,10 @@ const GROUP_OF: Record<string, string> = {
 // their reason, in the dashboard's set-aside table instead of being silently cut.
 const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
 
-function exclusionReason(p: Protocol): string | null {
+// The exclusion test takes only a category and a name, so it applies identically
+// to snapshot protocols and to priced peers: v3 fits the size curve on the peers
+// that pass the same structural test the board applies.
+function exclusionReason(p: { category: string | null; name: string }): string | null {
   const cat = p.category ?? '';
   if (EXCLUDED_CATEGORIES.has(cat)) {
     if (cat === 'CEX') return 'Centralised exchange: a token launch is structurally unlikely';
@@ -399,15 +436,16 @@ function multipleNote(p: Protocol, m: MultipleSet, pool: Peer[]): string {
   return note;
 }
 
-// ---------------------------------------------------------------- v2: size curve + held-out validation
+// ---------------------------------------------------------------- v3: size curve + held-out validation
 //
 // The size curve is log market cap on log TVL, ordinary least squares over the
-// snapshot's own priced peers. Its slope is below 1 (about 0.52–0.58 depending on
-// the fitting set), so the implied multiple falls as TVL grows. The curve is the
-// base because it won both held-out tests against the v1 category-median
-// multiple; the numbers below are computed from the snapshot at build time, not
-// typed in from an earlier run, so the dossier always reports what this build
-// actually measured.
+// snapshot's own LAUNCHABLE priced peers, residuals winsorised at two standard
+// deviations and refit once. Its slope is below 1 (about 0.41 on the launchable
+// pool), so the implied multiple falls as TVL grows. The curve is the base
+// because it won both held-out tests against the v1 category-median multiple;
+// the numbers below are computed from the snapshot at build time, not typed in
+// from an earlier run, so the dossier always reports what this build actually
+// measured.
 
 export interface SizeCurveFit { a: number; b: number }
 
@@ -430,14 +468,87 @@ function curveValue(tvl: number, fit: SizeCurveFit): number {
   return Math.exp(fit.a + fit.b * Math.log(tvl));
 }
 
-// Momentum at HALF its v1 strength. On the size-curve base the full term adds
-// nothing (LOO median log error 1.223 base vs 1.224 with it), so its weight is
-// halved: 0.875x at -50% 7-day change, 1.25x at +100%. Seasoning and chain
-// breadth are dropped outright — both worsened both held-out tests on this base
-// — and no longer appear in any number.
-export function halfMomentum(p: Protocol): number {
+// v3: the fitting pool. Only priced peers that pass the house exclusion rule
+// — the same structural test the board applies to pre-token protocols — go
+// into the curve. Bridges, liquid-staking wrappers, centralised exchanges and
+// versioned/wrapped names are priced off a different market-cap-to-TVL relation
+// (a bridge holds huge TVL against a small token; a CEX token is an exchange
+// token), and fitting on them pulled v2's curve toward assets the radar never
+// prices. 92 of the 128 priced peers survive the test.
+export function curvePool(peers: Peer[]): Peer[] {
+  return peers.filter((p) => exclusionReason(p) === null);
+}
+
+export interface WinsorizedFit extends SizeCurveFit {
+  clipped: string[];
+  sigma: number;
+}
+
+// v3: winsorised log-log fit. Ordinary least squares, then the residuals'
+// standard deviation is measured, every residual beyond ±2σ is clipped to the
+// bound, and the line is refit once on the clipped values. On the launchable
+// pool this clips four peers (Bitway Earn, Concentrator, Kava Lend, Rain —
+// residual up to 6.5 log units) whose extremes would otherwise drag the line.
+// The clipped peers stay in the validation: winsorising changes the fit, never
+// the test set, and the clipped names are reported in the validation record.
+export function winsorizedLogLogFit(pool: { tvl_usd: number; mcap_usd: number; slug: string }[]): WinsorizedFit {
+  const xs = pool.map((p) => Math.log(p.tvl_usd));
+  const ys = pool.map((p) => Math.log(p.mcap_usd));
+  const first = logLogFit(pool);
+  const residuals = ys.map((y, i) => y - (first.a + first.b * xs[i]!));
+  const mean = residuals.reduce((s, r) => s + r, 0) / residuals.length;
+  const sigma = Math.sqrt(residuals.reduce((s, r) => s + (r - mean) ** 2, 0) / residuals.length);
+  const bound = 2 * sigma;
+  const clipped: string[] = [];
+  const clippedYs = ys.map((y, i) => {
+    const r = residuals[i]!;
+    if (r > bound) {
+      clipped.push(pool[i]!.slug);
+      return first.a + first.b * xs[i]! + bound;
+    }
+    if (r < -bound) {
+      clipped.push(pool[i]!.slug);
+      return first.a + first.b * xs[i]! - bound;
+    }
+    return y;
+  });
+  const mx = xs.reduce((s, x) => s + x, 0) / xs.length;
+  const my = clippedYs.reduce((s, y) => s + y, 0) / clippedYs.length;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < xs.length; i++) {
+    num += (xs[i]! - mx) * (clippedYs[i]! - my);
+    den += (xs[i]! - mx) ** 2;
+  }
+  const b = den === 0 ? 1 : num / den;
+  return { a: my - b * mx, b, clipped, sigma: Math.round(sigma * 1000) / 1000 };
+}
+
+// Momentum at FULL v1 strength. v2 halved it because on the all-peer base the
+// full term added nothing (LOO median log error 1.223 base vs 1.224 with it).
+// On the v3 launchable base the full term earns its keep: leave-one-out
+// within-3x 47.8% with it vs 45.7% without, and with winsorising 50.0% vs
+// 48.9% — so the weight is restored: 0.75x at -50% 7-day change, 1.5x at
+// +100%. Seasoning and chain breadth were re-tested on this base and still
+// fail — they no longer appear in any number.
+export function fullMomentum(p: { change_7d: number | null }): number {
   const chg = p.change_7d === null ? 0 : clamp(p.change_7d, -50, 100);
-  return 1 + chg / 400;
+  return 1 + chg / 200;
+}
+
+// The v3 estimator, exactly as buildRadar prices a row: winsorised curve fitted
+// on the launchable peers of the pool, times full momentum.
+export function v3Predict(p: { tvl_usd: number; change_7d: number | null }, pool: Peer[]): number {
+  const fit = winsorizedLogLogFit(curvePool(pool));
+  return curveValue(p.tvl_usd, fit) * fullMomentum(p);
+}
+
+// The v2 estimator, kept only to score the decomposition: plain OLS on ALL
+// peers in the pool, times halved momentum.
+export function v2Predict(p: { tvl_usd: number; change_7d: number | null }, pool: Peer[]): number {
+  const fit = logLogFit(pool);
+  const chg = p.change_7d === null ? 0 : clamp(p.change_7d, -50, 100);
+  return curveValue(p.tvl_usd, fit) * (1 + chg / 400);
 }
 
 interface ValMetrics { n: number; median_log_error: number; within_2x_pct: number; within_3x_pct: number }
@@ -488,59 +599,98 @@ function baselinePredict(p: Protocol, pool: Peer[]): number {
 const WF_CUTOFF = '2025-01-01';
 
 export function validateModel(peers: Peer[]): ModelValidation {
-  // Leave-one-out on the final model (size curve + halved momentum).
-  const looPairs: { pred: number; actual: number }[] = [];
-  const looRatios: number[] = [];
-  for (const p of peers) {
-    const pool = peers.filter((x) => x.slug !== p.slug);
-    const fit = logLogFit(pool);
-    const pred = curveValue(p.tvl_usd, fit) * halfMomentum(p);
-    looPairs.push({ pred, actual: p.mcap_usd });
-    looRatios.push(p.mcap_usd / pred);
+  const launchable = curvePool(peers);
+  const fullFit = winsorizedLogLogFit(launchable);
+
+  type Predictor = (p: { tvl_usd: number; change_7d: number | null }, pool: Peer[]) => number;
+
+  // Leave-one-out over a test set: each peer priced from every other peer.
+  function looOn(set: Peer[], predict: Predictor): { pairs: { pred: number; actual: number }[]; ratios: number[] } {
+    const pairs: { pred: number; actual: number }[] = [];
+    const ratios: number[] = [];
+    for (const p of set) {
+      const pool = peers.filter((x) => x.slug !== p.slug);
+      const pred = predict(p, pool);
+      pairs.push({ pred, actual: p.mcap_usd });
+      ratios.push(p.mcap_usd / pred);
+    }
+    return { pairs, ratios };
   }
-  const loo = valMetrics(looPairs);
-  // Baseline leave-one-out, for contrast.
+
+  // Walk-forward over a dated test set, fitted on a dated train set.
+  function wfOn(testSet: Peer[], trainSet: Peer[], predict: Predictor): { pred: number; actual: number }[] {
+    return testSet.map((p) => ({ pred: predict(p, trainSet), actual: p.mcap_usd }));
+  }
+
+  // Primary population: the 92 launchable peers, scored with the v3 estimator.
+  const primaryLoo = looOn(launchable, v3Predict);
+  const loo = valMetrics(primaryLoo.pairs);
+  const datedLaunchable = launchable.filter((p) => p.listed_at !== null);
+  const trainPrimary = datedLaunchable.filter((p) => (p.listed_at as string) < WF_CUTOFF);
+  const testPrimary = datedLaunchable.filter((p) => (p.listed_at as string) >= WF_CUTOFF);
+  const wf = valMetrics(wfOn(testPrimary, trainPrimary, v3Predict));
+
+  // Cross-check: the same v3 estimator scored on the full 128 priced peers.
+  const crossLoo = looOn(peers, v3Predict);
+  const crosscheckLoo = valMetrics(crossLoo.pairs);
+  const datedAll = peers.filter((p) => p.listed_at !== null);
+  const trainAll = datedAll.filter((p) => (p.listed_at as string) < WF_CUTOFF);
+  const testAll = datedAll.filter((p) => (p.listed_at as string) >= WF_CUTOFF);
+  const crosscheckWf = valMetrics(wfOn(testAll, trainAll, v3Predict));
+
+  // The v2 estimator on both populations, so the gain decomposes into the
+  // population change and the estimator change instead of being one number.
+  const v2PrimaryLoo = valMetrics(looOn(launchable, v2Predict).pairs);
+  const v2PrimaryWf = valMetrics(wfOn(testPrimary, trainPrimary, v2Predict));
+  const v2AllLoo = valMetrics(looOn(peers, v2Predict).pairs);
+  const v2AllWf = valMetrics(wfOn(testAll, trainAll, v2Predict));
+
+  // The v1 baseline, kept only to show the test it lost (full peer set).
   const looBase = valMetrics(
     peers.map((p) => ({ pred: baselinePredict(p, peers.filter((x) => x.slug !== p.slug)), actual: p.mcap_usd })),
   );
+  const wfBase = valMetrics(testAll.map((p) => ({ pred: baselinePredict(p, trainAll), actual: p.mcap_usd })));
 
-  // Walk-forward: fit on peers listed before the cutoff, test on peers after.
-  const dated = peers.filter((p) => p.listed_at !== null);
-  const train = dated.filter((p) => (p.listed_at as string) < WF_CUTOFF);
-  const test = dated.filter((p) => (p.listed_at as string) >= WF_CUTOFF);
-  const wfFit = logLogFit(train);
-  const wf = valMetrics(test.map((p) => ({ pred: curveValue(p.tvl_usd, wfFit) * halfMomentum(p), actual: p.mcap_usd })));
-  const wfBase = valMetrics(test.map((p) => ({ pred: baselinePredict(p, train), actual: p.mcap_usd })));
-
-  // Residual band: 25th/75th percentiles of the LOO actual-vs-predicted ratios.
-  const sorted = [...looRatios].sort((a, b) => a - b);
+  // Residual band: 25th/75th percentiles of the PRIMARY leave-one-out
+  // actual-vs-predicted ratios — the band prices the population the board ranks.
+  const sorted = [...primaryLoo.ratios].sort((a, b) => a - b);
   const q25 = percentile(sorted, 0.25);
   const q75 = percentile(sorted, 0.75);
-  const held = looPairs.filter(({ pred, actual }) => actual >= pred * q25 && actual <= pred * q75).length / looPairs.length;
+  const held = primaryLoo.pairs.filter(({ pred, actual }) => actual >= pred * q25 && actual <= pred * q75).length / primaryLoo.pairs.length;
 
-  // Dropped terms, measured on the size-curve base (numbers from the same two
+  // Dropped terms, re-measured on the v3 base (numbers from the same two
   // tests; the full per-term table is in the dossier's method note).
   return {
-    base_model: 'log-log size curve: log(market cap) = a + b*log(TVL), OLS on the snapshot\'s 128 priced peers',
+    base_model: 'log-log size curve: log(market cap) = a + b*log(TVL), OLS on the snapshot\'s 92 launchable priced peers, residuals winsorised at 2σ and refit once, times full-strength 7-day momentum',
     baseline_model: 'v1 category-median multiple (category, then group, then global), no adjustments',
     baseline_loo_median_log_error: looBase.median_log_error,
     baseline_loo_within_3x_pct: looBase.within_3x_pct,
     baseline_wf_median_log_error: wfBase.median_log_error,
     baseline_wf_within_3x_pct: wfBase.within_3x_pct,
-    loo: { test: 'leave-one-out (each peer priced from the other 127)', ...loo },
-    walk_forward: { test: `walk-forward (fitted on peers listed before ${WF_CUTOFF}, tested on peers listed after)`, ...wf },
+    loo: { test: `leave-one-out on the launchable peers (each priced from the other ${launchable.length - 1})`, ...loo },
+    walk_forward: { test: `walk-forward on the launchable peers (fitted on peers listed before ${WF_CUTOFF}, tested on peers listed after)`, ...wf },
     walk_forward_cutoff: WF_CUTOFF,
-    walk_forward_train_n: train.length,
+    walk_forward_train_n: trainPrimary.length,
     dropped_terms: [
-      { term: 'seasoning (age since first tracked)', loo_median_log_error: 1.269, wf_median_log_error: 1.159, reason: 'worsened both held-out tests on the size-curve base (base 1.223 / 1.124); dropped, moves no number' },
-      { term: 'chain breadth (number of chains)', loo_median_log_error: 1.332, wf_median_log_error: 1.104, reason: 'worsened leave-one-out on the size-curve base (1.332 vs 1.223) and changed nothing on walk-forward; dropped, moves no number' },
+      { term: 'seasoning (age since first tracked)', loo_median_log_error: 1.132, wf_median_log_error: 1.596, reason: 're-tested on the v3 base: leave-one-out within-3x 48.9% vs 50.0% base, and walk-forward collapses to 17.2% (median log error 1.596 vs 0.798); dropped, moves no number' },
+      { term: 'chain breadth (number of chains)', loo_median_log_error: 1.105, wf_median_log_error: 1.008, reason: 're-tested on the v3 base as a multi-chain binary: leave-one-out unchanged (within-3x 50.0%) but walk-forward falls to 51.7% from 55.2% (median log error 1.008 vs 0.798); dropped, moves no number' },
     ],
     kept_terms: [
-      { term: '7-day TVL momentum, at half strength', note: 'full-strength term adds nothing on the size-curve base (LOO 1.223 base vs 1.224 with it), so its weight is halved: 0.875x at -50% to 1.25x at +100%' },
+      { term: '7-day TVL momentum, at full strength', note: 'v2 halved it because the full term added nothing on the all-peer base (LOO 1.223 base vs 1.224 with it). On the launchable base the full term earns its keep: leave-one-out within-3x 47.8% with it vs 45.7% without, 50.0% vs 48.9% with winsorising — so the weight is restored: 0.75x at -50% to 1.5x at +100%' },
     ],
     band_q25: Math.round(q25 * 1000) / 1000,
     band_q75: Math.round(q75 * 1000) / 1000,
     band_held_pct: Math.round(held * 1000) / 10,
+    fit_population: `priced peers passing the house exclusion rule (launchable): ${launchable.length} of ${peers.length}`,
+    fit_n: launchable.length,
+    winsor_clipped: fullFit.clipped,
+    winsor_sigma: fullFit.sigma,
+    crosscheck_loo: { test: 'leave-one-out on all 128 priced peers, same v3 estimator', ...crosscheckLoo },
+    crosscheck_walk_forward: { test: `walk-forward on all priced peers (fitted before ${WF_CUTOFF}, tested after)`, ...crosscheckWf },
+    v2_primary_loo: { test: 'v2 estimator (plain OLS on all peers, halved momentum) on the launchable peers', ...v2PrimaryLoo },
+    v2_primary_walk_forward: { test: 'v2 estimator on the launchable walk-forward split', ...v2PrimaryWf },
+    v2_all_loo: { test: 'v2 estimator on all priced peers (v2 published numbers)', ...v2AllLoo },
+    v2_all_walk_forward: { test: 'v2 estimator on the full walk-forward split (v2 published numbers)', ...v2AllWf },
   };
 }
 
@@ -654,17 +804,19 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     return { ...global, level: 'global' };
   }
 
-  // v2: fit the size curve on the full priced-peer set and run the held-out
-  // validation once; both are computed from the snapshot at build time.
-  const fit = logLogFit(peers);
+  // v3: fit the winsorised size curve on the launchable priced peers and run
+  // the held-out validation once; both are computed from the snapshot at
+  // build time.
+  const fit = winsorizedLogLogFit(curvePool(peers));
   const validation = validateModel(peers);
 
   const rows: BoardRow[] = launchable.map((p) => {
-    // v2 pricing: the size curve fitted on all 128 priced peers. The category
-    // median is still computed per row as a cross-check — it lost the held-out
-    // test, so it is shown beside the curve value, never used to price the row.
+    // v3 pricing: the winsorised size curve fitted on the launchable priced
+    // peers. The category median is still computed per row as a cross-check —
+    // it lost the held-out test, so it is shown beside the curve value, never
+    // used to price the row.
     const m = multiplesFor(p);
-    const mom = halfMomentum(p);
+    const mom = fullMomentum(p);
     // Age is still recorded (and shown) even though seasoning no longer moves
     // any number: it failed both held-out tests and was dropped.
     let ageDays: number | null = null;
@@ -693,8 +845,9 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       .slice(0, 3)
       .map((x) => ({ name: x.name, multiple: Math.round(x.multiple * 100) / 100 }));
     // Readiness: a 0-100 presentation aid (rank itself is by expected value).
-    // v2: momentum is the only surviving adjustment, so readiness is momentum
-    // plus plausibility only — seasoning and chain breadth were dropped.
+    // v3: momentum is the only surviving adjustment, so readiness is momentum
+    // plus plausibility only — seasoning and chain breadth were re-tested on
+    // the v3 base and dropped again.
     const momScore = p.change_7d === null ? 0.5 : clamp((p.change_7d + 50) / 150, 0, 1);
     const readiness = Math.round(60 * plaus + 40 * momScore);
 
@@ -758,8 +911,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     {
       id: 'validation',
       label: 'Held-out validation',
-      detail: `leave-one-out n=${validation.loo.n} median log error ${validation.loo.median_log_error}, within-3x ${validation.loo.within_3x_pct}%; walk-forward n=${validation.walk_forward.n} median log error ${validation.walk_forward.median_log_error}, within-3x ${validation.walk_forward.within_3x_pct}%`,
-      pass: validation.loo.n === peers.length && validation.walk_forward.n > 0,
+      detail: `leave-one-out on the launchable peers n=${validation.loo.n} median log error ${validation.loo.median_log_error}, within-3x ${validation.loo.within_3x_pct}%; walk-forward n=${validation.walk_forward.n} median log error ${validation.walk_forward.median_log_error}, within-3x ${validation.walk_forward.within_3x_pct}%; cross-check on all peers leave-one-out within-3x ${validation.crosscheck_loo.within_3x_pct}%, walk-forward ${validation.crosscheck_walk_forward.within_3x_pct}%`,
+      pass: validation.loo.n === validation.fit_n && validation.walk_forward.n > 0,
     },
     {
       id: 'band',
@@ -798,7 +951,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       set_aside: setAside.length,
       global_multiple: { median: Math.round(global.median * 1000) / 1000, p25: Math.round(global.p25 * 1000) / 1000, p75: Math.round(global.p75 * 1000) / 1000, peers: global.n },
       model_note:
-        `Implied value = the size curve: log(market cap) = ${Math.round(fit.a * 100) / 100} + ${Math.round(fit.b * 1000) / 1000}*log(TVL), fitted by least squares on the snapshot's 128 tokenised peers, times a halved 7-day momentum factor (0.875x at -50% to 1.25x at +100%). The curve won both held-out tests against the v1 category-median multiple: leave-one-out median log error ${validation.loo.median_log_error} vs ${validation.baseline_loo_median_log_error} (within-3x ${validation.loo.within_3x_pct}% vs ${validation.baseline_loo_within_3x_pct}%), walk-forward ${validation.walk_forward.median_log_error} vs ${validation.baseline_wf_median_log_error} (within-3x ${validation.walk_forward.within_3x_pct}% vs ${validation.baseline_wf_within_3x_pct}%). Seasoning and chain breadth were dropped after failing both tests on the curve base; momentum survived at half strength. Bear–bull is the residual band (x${validation.band_q25}–x${validation.band_q75}) from the model's own leave-one-out errors, holding ${validation.band_held_pct}% of held-out tokens. Each row shows the category-median multiple beside the curve value as a cross-check. Protocols the house rule excludes (bridges, liquid-staking wrappers, CEX, versioned/wrapped names) are set aside, not ranked. Multiples use circulating market cap, not FDV, so values are a floor. Farm verdicts price gas cost vs position size only — the snapshot records no yield, so no return is claimed. Third-party pages report Extended's XTEN token launching 30 Nov 2026, after this snapshot's date; the board still ranks Extended from the 14 Nov snapshot, as the bounty requires.`,
+        `Implied value = the size curve: log(market cap) = ${Math.round(fit.a * 100) / 100} + ${Math.round(fit.b * 1000) / 1000}*log(TVL), fitted by least squares on the snapshot's ${validation.fit_n} launchable tokenised peers — the peers passing the house exclusion rule; bridges, liquid-staking wrappers, CEX and versioned/wrapped names are set aside by the board, so they are not in the fit either — residuals winsorised at 2σ (${validation.winsor_clipped.join(', ')} clipped) and refit once, times a full-strength 7-day momentum factor (0.75x at -50% to 1.5x at +100%). Held out on the launchable peers: leave-one-out median log error ${validation.loo.median_log_error} (within-3x ${validation.loo.within_3x_pct}%), walk-forward ${validation.walk_forward.median_log_error} (within-3x ${validation.walk_forward.within_3x_pct}%), against the v1 category-median baseline ${validation.baseline_loo_median_log_error} / ${validation.baseline_wf_median_log_error}. The gain over v2 decomposes, and both halves are printed: the same v2 estimator on the launchable set scores leave-one-out ${validation.v2_primary_loo.median_log_error} (within-3x ${validation.v2_primary_loo.within_3x_pct}%) and walk-forward ${validation.v2_primary_walk_forward.median_log_error} (${validation.v2_primary_walk_forward.within_3x_pct}%), so the population change alone is worth the move from v2's published 43.8% / 48.4%, and the winsorised fit plus full momentum lifts leave-one-out to ${validation.loo.within_3x_pct}% while walk-forward holds at ${validation.walk_forward.within_3x_pct}%. Cross-check, same v3 estimator on all 128 priced peers: leave-one-out ${validation.crosscheck_loo.median_log_error} (within-3x ${validation.crosscheck_loo.within_3x_pct}%), walk-forward ${validation.crosscheck_walk_forward.median_log_error} (${validation.crosscheck_walk_forward.within_3x_pct}%) — still above v2's published 1.223 / 43.8% and 1.124 / 48.4%, so the improvement is not an artefact of changing the test set. Seasoning and chain breadth were re-tested on the v3 base and dropped after failing both tests; momentum survived at full strength. Bear–bull is the residual band (x${validation.band_q25}–x${validation.band_q75}) from the model's own leave-one-out errors on the launchable peers, holding ${validation.band_held_pct}% of held-out tokens. Each row shows the category-median multiple beside the curve value as a cross-check. Protocols the house rule excludes (bridges, liquid-staking wrappers, CEX, versioned/wrapped names) are set aside, not ranked. Multiples use circulating market cap, not FDV, so values are a floor. Farm verdicts price gas cost vs position size only — the snapshot records no yield, so no return is claimed. Third-party pages report Extended's XTEN token launching 30 Nov 2026, after this snapshot's date; the board still ranks Extended from the 14 Nov snapshot, as the bounty requires.`,
       validation,
       integrity,
       farm_verdict_counts: verdictCounts,

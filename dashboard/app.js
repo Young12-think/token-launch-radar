@@ -44,7 +44,7 @@
     return '<div class="check-chip ' + (c.pass ? 'ok' : 'bad') + '"><b>' + (c.pass ? 'PASS' : 'FAIL') + ' · ' + esc(c.label) + '</b><span>' + esc(c.detail) + '</span></div>';
   }).join('');
   $('integrityNote').textContent = val
-    ? 'Model: ' + val.base_model + '. Held-out: leave-one-out median log error ' + val.loo.median_log_error + ' (within-3x ' + val.loo.within_3x_pct + '%), walk-forward ' + val.walk_forward.median_log_error + ' (within-3x ' + val.walk_forward.within_3x_pct + '%). The v1 category-median baseline scored ' + val.baseline_loo_median_log_error + ' / ' + val.baseline_wf_median_log_error + '. Dropped after failing both tests: seasoning, chain breadth. Momentum kept at half strength.'
+    ? 'Model: ' + val.base_model + '. Held-out on the ' + val.fit_n + ' launchable peers: leave-one-out median log error ' + val.loo.median_log_error + ' (within-3x ' + val.loo.within_3x_pct + '%), walk-forward ' + val.walk_forward.median_log_error + ' (within-3x ' + val.walk_forward.within_3x_pct + '%). Cross-check on all priced peers: leave-one-out within-3x ' + val.crosscheck_loo.within_3x_pct + '%, walk-forward ' + val.crosscheck_walk_forward.within_3x_pct + '%. The v2 estimator on the launchable peers scored leave-one-out within-3x ' + val.v2_primary_loo.within_3x_pct + '%, walk-forward ' + val.v2_primary_walk_forward.within_3x_pct + '%. The v1 category-median baseline scored ' + val.baseline_loo_median_log_error + ' / ' + val.baseline_wf_median_log_error + '. Dropped after failing both tests: seasoning, chain breadth. Momentum kept at full strength.'
     : '';
 
   /* ---- top stats ---- */
@@ -125,12 +125,12 @@
       '<dt>Size curve value</dt><dd>' + money(r.curve_value_usd) + '</dd>' +
       '<dt>Size curve</dt><dd>log(mcap) = ' + r.curve_intercept + ' + ' + r.curve_slope + '·log(TVL)</dd>' +
       '<dt>Category median (cross-check)</dt><dd>' + r.category_multiple + 'x · ' + r.multiple_level + ' · ' + r.category_peer_count + ' peers — tested, lost, prices nothing</dd>' +
-      '<dt>Momentum factor (half strength)</dt><dd>×' + r.momentum_factor.toFixed(3) + '</dd>' +
+      '<dt>Momentum factor (full strength)</dt><dd>×' + r.momentum_factor.toFixed(3) + '</dd>' +
       '<dt>Implied launch value</dt><dd>' + money(r.implied_value_usd) + '</dd>' +
       '<dt>Bear — Bull range</dt><dd>' + money(r.bear_usd) + ' — ' + money(r.bull_usd) + '</dd>' +
       '<dt>Readiness</dt><dd>' + r.readiness + ' / 100</dd>';
     $('dMultNote').textContent = r.multiple_note ? 'Why this cross-check: ' + r.multiple_note : '';
-    $('dLevel').textContent = 'Seasoning and chain breadth were dropped after failing both held-out tests; momentum survived at half strength. ' + (r.plausibility_reasons.length
+    $('dLevel').textContent = 'Seasoning and chain breadth were dropped after failing both held-out tests; momentum survived at full strength. ' + (r.plausibility_reasons.length
       ? 'Launch plausibility ' + r.plausibility + 'x — ' + r.plausibility_reasons.join('; ') + '.'
       : 'No structural discount: nothing in the record marks this protocol a wrapped, bridged or exchange product.');
     var fv = r.farm_verdict;

@@ -113,11 +113,11 @@
     <div class="method-grid">
       <div>
         <h3>The formula</h3>
-        <p>Implied value = the size curve: log(market cap) = a + b·log(TVL), fitted by least squares on the snapshot's 128 tokenised peers, times a halved 7-day momentum factor (0.875x at −50% to 1.25x at +100%). The slope is below 1, so the implied multiple falls as TVL grows — the largest priced peers prove it (Lido 0.013x, OKX 0.075x, EigenCloud 0.032x). The category-median multiple is still shown per row as a cross-check; it lost the held-out test, so it prices nothing.</p>
+        <p>Implied value = the size curve: log(market cap) = a + b·log(TVL), fitted by least squares on the snapshot's 92 launchable tokenised peers — the peers passing the house exclusion rule, so the curve describes the population the board actually ranks — residuals winsorised at 2σ and refit once, times a full-strength 7-day momentum factor (0.75x at −50% to 1.5x at +100%). The slope is 0.41, so the implied multiple falls as TVL grows. The category-median multiple is still shown per row as a cross-check; it lost the held-out test, so it prices nothing.</p>
       </div>
       <div>
         <h3>Tested, not asserted</h3>
-        <p>Every term was put to two held-out tests on the snapshot itself — leave-one-out over all 128 peers, and walk-forward (fitted on peers listed before 2025, tested on peers listed after). The size curve won both against the v1 category-median multiple; seasoning and chain breadth failed both and were dropped; momentum survived at half strength. The bear–bull band is the 25th–75th percentile of the model's own leave-one-out errors. Full numbers are in the integrity strip above and in each row's detail view.</p>
+        <p>Every term was put to two held-out tests on the snapshot itself — leave-one-out over the 92 launchable peers, and walk-forward (fitted on peers listed before 2025, tested on peers listed after) — with a cross-check on all 128 priced peers beside it, and the v2 estimator scored on both populations so the gain decomposes into the population change and the estimator change. The size curve won both against the v1 category-median multiple; seasoning and chain breadth failed both and were dropped (re-tested on the v3 base and still failing); momentum survived at full strength. The bear–bull band is the 25th–75th percentile of the model's own leave-one-out errors on the launchable peers. Full numbers are in the integrity strip above and in each row's detail view.</p>
       </div>
       <div>
         <h3>What is not in the number</h3>
